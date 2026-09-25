@@ -802,11 +802,29 @@ namespace Parameters
     double epsilon_interface;
     bool   with_tracer_limiter;
 
-    // Mesh forcing parameters : these parameters control the behavior of the
-    // source term in the pseudosolid equation, in the CHNS-ALE model
-    // FIXME: use more explicit names, when the formulation has been decided
-    double alpha;
-    double beta;
+    // Mesh forcing parameters control the source term in the pseudosolid
+    // equation of CHNS-ALE. Explicit names now distinguish the two factors.
+    // Moving-mesh forcing of the pseudosolid equation (CHNS-ALE model). The
+    // built-in source is the Cahn-Hilliard compression form ("chns form").
+    // The custom selector is reserved; free elasticity sources are separate.
+    enum class MeshForcingSourceTerm
+    {
+      off,
+      chns_form,
+      custom
+    } mff_source_term;
+
+    // Compression factor multiplying the phi-based forcing factor(phi)*grad
+    // phi.
+    double mff_physics_compression_factor;
+    // Transport factor (full CHNS solver only; unused by the presolver).
+    double mff_transport_factor;
+    // Regularization gamma inside the saturated compression factor.
+    double mff_regularization_gamma;
+
+    // If true, an elasticity presolver is run first to pre-position the mesh,
+    // and its mesh position is injected as the initial mesh of the CHNS solver.
+    bool use_presolver;
 
     void declare_parameters(ParameterHandler &prm);
     void read_parameters(ParameterHandler &prm);
@@ -827,6 +845,12 @@ namespace Parameters
     // Number of steps to use in the continuation method when the source term
     // is applied on the current configuration.
     unsigned int n_continuation_steps;
+
+    // Cahn-Hilliard presolver: the compression forcing is ramped from
+    // (initial multiplier) up to its physical value (1) over the given number
+    // of continuation steps.
+    double       presolver_initial_compression_multiplier;
+    unsigned int presolver_continuation_steps;
 
     void declare_parameters(ParameterHandler &prm);
     void read_parameters(ParameterHandler &prm);

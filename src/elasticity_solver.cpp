@@ -19,8 +19,11 @@
 #include <solver_info.h>
 #include <utilities.h>
 
+
 template <int dim>
-ElasticitySolver<dim>::ElasticitySolver(const ParameterReader<dim> &param)
+ElasticitySolver<dim>::ElasticitySolver(
+  const ParameterReader<dim>                  &param,
+  parallel::DistributedTriangulationBase<dim> *reference_triangulation)
   : GenericSolver<LA::ParVectorType>(param.output,
                                      param.nonlinear_solver,
                                      param.timer,
@@ -30,7 +33,13 @@ ElasticitySolver<dim>::ElasticitySolver(const ParameterReader<dim> &param)
                                      SolverInfo::SolverType::elasticity)
   , ordering(ComponentOrderingElasticity<dim>())
   , param(param)
-  , triangulation(mpi_communicator)
+  , owned_triangulation(
+      reference_triangulation ?
+        nullptr :
+        std::make_unique<parallel::fullydistributed::Triangulation<dim>>(
+          mpi_communicator))
+  , triangulation(reference_triangulation ? *reference_triangulation :
+                                            *owned_triangulation)
   , dof_handler(triangulation)
   , time_handler(param.time_integration)
 {
@@ -104,8 +113,10 @@ void ElasticitySolver<dim>::reset()
   param.mesh.filename          = mesh_param.filename;
   param.time_integration.dt    = time_param.dt;
 
-  // Mesh
-  triangulation.clear();
+  // Mesh: release only this solver's DoFs when borrowing the reference mesh.
+  dof_handler.clear();
+  if (owned_triangulation)
+    triangulation.clear();
 
   // Direct solver
   direct_solver_reuse =
@@ -119,8 +130,16 @@ template <int dim>
 void ElasticitySolver<dim>::run()
 {
   reset();
+  const double initial_time = param.time_integration.t_initial;
+  for (auto &[id, bc] : param.pseudosolid_bc)
+    bc.set_time(initial_time);
+  source_terms->set_time(initial_time);
+  exact_solution->set_time(initial_time);
+  param.physical_properties.set_time(initial_time);
+  param.initial_conditions.initial_chns_tracer_callback->set_time(initial_time);
   setup_assemblers();
-  MeshTools::read_mesh(triangulation, param);
+  if (owned_triangulation)
+    MeshTools::read_mesh(triangulation, param);
   setup_dofs();
   create_zero_constraints();
   create_nonzero_constraints();
@@ -130,7 +149,45 @@ void ElasticitySolver<dim>::run()
 
   update_boundary_conditions();
 
-  if (param.elasticity.enable_source_term_on_current_mesh)
+  if (param.cahn_hilliard.mff_source_term ==
+      Parameters::CahnHilliard<dim>::MeshForcingSourceTerm::chns_form)
+  {
+    /**
+     * Cahn-Hilliard moving-mesh forcing. The compression forcing is steep, so
+     * its multiplier is ramped from a small fraction up to its physical value
+     * (1) with a continuation method. The user-source multipliers are disabled.
+     */
+    scratch_data->source_term_fixed_mesh_multiplier  = 0.;
+    scratch_data->source_term_moving_mesh_multiplier = 0.;
+
+    const double c_min =
+      param.elasticity.presolver_initial_compression_multiplier;
+    const unsigned int n_steps = param.elasticity.presolver_continuation_steps;
+
+    AssertThrow(n_steps == 1 || (std::isfinite(c_min) && c_min > 0.),
+                ExcMessage(
+                  "Multiple presolver continuation steps require a "
+                  "strictly positive initial compression multiplier."));
+
+    for (unsigned int n = 0; n < n_steps; ++n)
+    {
+      // A single step and the final step both solve the physical target.
+      scratch_data->chns_compression_multiplier =
+        n + 1 == n_steps ?
+          1. :
+          std::pow(c_min, 1. - static_cast<double>(n) / (n_steps - 1));
+      pcout << std::endl;
+      pcout << "Continuation method - Step " << n + 1 << "/" << n_steps
+            << " : chns compression multiplier = "
+            << scratch_data->chns_compression_multiplier << std::endl;
+      pcout << std::endl;
+
+      if (param.nonlinear_solver.compare_jacobian_with_finite_differences)
+        compare_analytical_matrix_with_fd();
+      solve_nonlinear_problem(time_handler);
+    }
+  }
+  else if (param.elasticity.enable_source_term_on_current_mesh)
   {
     /**
      * Continuation method to handle possibly steep source terms evaluated
@@ -495,7 +552,7 @@ void ElasticitySolver<dim>::solve_linear_system()
 }
 
 template <int dim>
-void ElasticitySolver<dim>::output_results()
+void ElasticitySolver<dim>::output_results(const Mapping<dim> *output_mapping)
 {
   TimerOutput::Scope t(computing_timer, "Write outputs");
 
@@ -519,7 +576,7 @@ void ElasticitySolver<dim>::output_results()
                              "subdomain",
                              DataOut<dim>::type_cell_data);
 
-    data_out.build_patches(*mapping, 2);
+    data_out.build_patches(output_mapping ? *output_mapping : *mapping, 2);
     data_out.write_vtu_with_pvtu_record(param.output.output_dir,
                                         param.output.output_prefix +
                                           "elasticity",
@@ -579,8 +636,17 @@ void ElasticitySolver<dim>::postprocess_solution()
   if (param.mms_param.enable)
     compute_errors();
 
-  move_mesh();
-  output_results();
+  if (owned_triangulation)
+  {
+    move_mesh();
+    output_results();
+  }
+  else
+  {
+    const MappingFEField<dim, dim, LA::ParVectorType> deformed_mapping(
+      dof_handler, present_solution, position_mask);
+    output_results(&deformed_mapping);
+  }
 }
 
 // Explicit instantiation

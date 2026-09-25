@@ -63,9 +63,12 @@ class ElasticitySolver : public GenericSolver<LA::ParVectorType>
 
 public:
   /**
-   * Constructor
+   * Constructor. An optional reference triangulation is borrowed and must
+   * outlive this solver. Its topology and reference vertices stay unchanged.
    */
-  ElasticitySolver(const ParameterReader<dim> &param);
+  ElasticitySolver(const ParameterReader<dim> &param,
+                   parallel::DistributedTriangulationBase<dim>
+                     *reference_triangulation = nullptr);
 
   virtual ~ElasticitySolver() = default;
 
@@ -137,7 +140,7 @@ public:
 
   void compute_errors();
 
-  virtual void output_results();
+  virtual void output_results(const Mapping<dim> *output_mapping = nullptr);
 
   /**
    *
@@ -169,10 +172,12 @@ protected:
   std::unique_ptr<Quadrature<dim - 1>> face_quadrature;
   std::unique_ptr<Quadrature<dim - 1>> error_face_quadrature;
 
-  parallel::fullydistributed::Triangulation<dim> triangulation;
-  std::unique_ptr<Mapping<dim>>                  mapping;
-  DoFHandler<dim>                                dof_handler;
-  TimeHandler                                    time_handler; // dummy
+  std::unique_ptr<parallel::fullydistributed::Triangulation<dim>>
+                                               owned_triangulation;
+  parallel::DistributedTriangulationBase<dim> &triangulation;
+  std::unique_ptr<Mapping<dim>>                mapping;
+  DoFHandler<dim>                              dof_handler;
+  TimeHandler                                  time_handler; // dummy
 
   std::unique_ptr<ScratchData>            scratch_data;
   std::vector<std::unique_ptr<Assembler>> assemblers;
