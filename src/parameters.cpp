@@ -1602,6 +1602,15 @@ namespace Parameters
   {
     prm.enter_subsection("Elasticity");
     {
+      prm.declare_entry(
+        "write final msh",
+        "false",
+        Patterns::Bool(),
+        "Write the converged elasticity/presolver mesh as "
+        "<output prefix>elasticity_final_mesh.msh in the output directory. "
+        "Requires a Gmsh .msh input mesh and Gmsh API support; preserves "
+        "the input connectivity, entities and physical groups.");
+
       prm.enter_subsection("current mesh source term");
       {
         prm.declare_entry(
@@ -1667,6 +1676,8 @@ namespace Parameters
   {
     prm.enter_subsection("Elasticity");
     {
+      write_final_msh = prm.get_bool("write final msh");
+
       prm.enter_subsection("current mesh source term");
       {
         enable_source_term_on_current_mesh = prm.get_bool("enable");
@@ -1727,6 +1738,7 @@ namespace Parameters
                                       "Manufactured solution"})
       relevant.add_child(section, all.get_child(section));
     relevant.get_child("Elasticity").erase("presolved mesh position");
+    relevant.get_child("Elasticity").erase("write final msh");
     relevant.add_child(
       "phase", all.get_child("Initial conditions.cahn hilliard tracer"));
     relevant.add_child("linear solver",

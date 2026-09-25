@@ -137,6 +137,12 @@ public:
   void move_mesh();
 
   /**
+   * Write the converged position at the original Gmsh nodes, preserving the
+   * input entities and physical groups without moving the reference mesh.
+   */
+  void write_final_msh();
+
+  /**
    * Try to load the presolved mesh position from the disk cache. The cache is
    * keyed by support-point location (so it is reusable with a different number
    * of MPI processes) and guarded by a fingerprint of the presolver-defining

@@ -4,6 +4,7 @@
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/serialization/vector.hpp>
 #include <compare_matrix.h>
+#include <deal.II/base/scope_exit.h>
 #include <deal.II/base/work_stream.h>
 #include <deal.II/dofs/dof_tools.h>
 #include <deal.II/fe/fe_q.h>
@@ -13,6 +14,7 @@
 #include <deal.II/lac/sparsity_tools.h>
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/vector_tools.h>
+#include <deal.II/numerics/vector_tools_evaluate.h>
 #include <deal.II/numerics/vector_tools_interpolate.h>
 #include <elasticity_solver.h>
 #include <errors.h>
@@ -28,6 +30,10 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+
+#if defined(DEAL_II_GMSH_WITH_API)
+#  include <gmsh.h>
+#endif
 
 namespace
 {
@@ -97,6 +103,25 @@ ElasticitySolver<dim>::ElasticitySolver(
   , dof_handler(triangulation)
   , time_handler(param.time_integration)
 {
+  if (param.elasticity.write_final_msh)
+  {
+    AssertThrow(param.mesh.deal_ii_preset_mesh == "none" &&
+                  !param.mesh.use_deal_ii_cube_mesh &&
+                  !(param.mms_param.enable &&
+                    (param.mms_param.use_deal_ii_cube_mesh ||
+                     param.mms_param.use_deal_ii_holed_plate_mesh)) &&
+                  std::filesystem::path(param.mesh.filename).extension() ==
+                    ".msh",
+                ExcMessage(
+                  "Writing the final deformed mesh requires a Gmsh .msh "
+                  "input mesh."));
+#if !defined(DEAL_II_GMSH_WITH_API)
+    AssertThrow(false,
+                ExcMessage("Gmsh API support is required to write the final "
+                           "deformed .msh file."));
+#endif
+  }
+
   create_quadrature_rules(param.finite_elements,
                           quadrature,
                           face_quadrature,
@@ -670,6 +695,163 @@ void ElasticitySolver<dim>::move_mesh()
 }
 
 template <int dim>
+void ElasticitySolver<dim>::write_final_msh()
+{
+#if defined(DEAL_II_GMSH_WITH_API)
+  const unsigned int rank = Utilities::MPI::this_mpi_process(mpi_communicator);
+
+  std::vector<std::size_t> node_tags;
+  std::vector<double>      node_coordinates;
+  std::vector<Point<dim>>  evaluation_points;
+  bool                     gmsh_initialized_here = false;
+  bool                     gmsh_model_owned      = false;
+  double                   gmsh_verbosity        = 0.;
+
+  const ScopeExit cleanup_owned_gmsh_state([&]() noexcept {
+    if (rank != 0 || !gmsh::isInitialized())
+      return;
+
+    if (gmsh_model_owned)
+      try
+      {
+        gmsh::clear();
+        gmsh::option::setNumber("General.Verbosity", gmsh_verbosity);
+      }
+      catch (...)
+      {}
+
+    if (gmsh_initialized_here)
+      try
+      {
+        gmsh::finalize();
+      }
+      catch (...)
+      {}
+  });
+
+  const auto on_root = [&](const auto &operation, const std::string &context) {
+    std::string error;
+    if (rank == 0)
+      try
+      {
+        operation();
+      }
+      catch (const std::exception &exception)
+      {
+        error = exception.what();
+      }
+      catch (const std::string &exception)
+      {
+        error = exception;
+      }
+      catch (...)
+      {
+        error = "unknown Gmsh error";
+      }
+    error = Utilities::MPI::broadcast(mpi_communicator, error, 0);
+    AssertThrow(error.empty(), ExcMessage(context + error));
+  };
+
+  on_root(
+    [&]() {
+      gmsh_initialized_here = !gmsh::isInitialized();
+      if (gmsh_initialized_here)
+        gmsh::initialize();
+
+      // This routine cannot restore an arbitrary caller-owned Gmsh model.
+      // Require no caller-owned model so clearing only removes the mesh opened
+      // here. Gmsh retains an unnamed empty model after initialize/clear.
+      std::vector<std::string> existing_models;
+      gmsh::model::list(existing_models);
+      bool model_available = existing_models.empty();
+      if (existing_models.size() == 1 && existing_models.front().empty())
+      {
+        gmsh::vectorpair entities;
+        gmsh::model::getEntities(entities);
+        model_available = entities.empty();
+      }
+      AssertThrow(model_available,
+                  ExcMessage("Cannot write the final mesh while another Gmsh "
+                             "model is open."));
+
+      gmsh::option::getNumber("General.Verbosity", gmsh_verbosity);
+      gmsh::option::setNumber("General.Verbosity", 2);
+      gmsh_model_owned = true;
+      gmsh::open(param.mesh.filename);
+
+      std::vector<double> parametric_coordinates;
+      gmsh::model::mesh::getNodes(node_tags,
+                                  node_coordinates,
+                                  parametric_coordinates,
+                                  -1,
+                                  -1,
+                                  false,
+                                  false);
+
+      evaluation_points.reserve(node_tags.size());
+      for (unsigned int i = 0; i < node_tags.size(); ++i)
+      {
+        Point<dim> point;
+        for (unsigned int d = 0; d < dim; ++d)
+          point[d] = node_coordinates[3 * i + d];
+        evaluation_points.push_back(point);
+      }
+    },
+    "Could not open the Gmsh input mesh: ");
+
+  present_solution.update_ghost_values();
+
+  Utilities::MPI::RemotePointEvaluation<dim, dim> cache;
+  const auto                                      deformed_positions =
+    VectorTools::point_values<dim>(*mapping,
+                                   dof_handler,
+                                   present_solution,
+                                   evaluation_points,
+                                   cache,
+                                   VectorTools::EvaluationFlags::avg,
+                                   ordering.x_lower);
+
+  const unsigned int all_points_found =
+    Utilities::MPI::min(cache.all_points_found() ? 1u : 0u, mpi_communicator);
+  if (all_points_found == 0)
+  {
+    AssertThrow(false,
+                ExcMessage(
+                  "Could not evaluate the deformed mesh position at all Gmsh "
+                  "nodes when writing the final .msh file."));
+  }
+
+  const std::string output_mesh_filename = param.output.output_dir +
+                                           param.output.output_prefix +
+                                           "elasticity_final_mesh.msh";
+  on_root(
+    [&]() {
+      AssertDimension(deformed_positions.size(), node_tags.size());
+
+      std::vector<double> coordinates(3, 0.0);
+      for (unsigned int i = 0; i < node_tags.size(); ++i)
+      {
+        for (unsigned int d = 0; d < dim; ++d)
+          coordinates[d] = deformed_positions[i][d];
+        if constexpr (dim == 2)
+          coordinates[2] = node_coordinates[3 * i + 2];
+
+        gmsh::model::mesh::setNode(node_tags[i], coordinates, {});
+      }
+
+      gmsh::write(output_mesh_filename);
+    },
+    "Could not write the final Gmsh mesh: ");
+
+  pcout << "Wrote final deformed mesh to " << output_mesh_filename << std::endl;
+#else
+  AssertThrow(false,
+              ExcMessage("Gmsh API support is required to write the final "
+                         "deformed .msh file."));
+#endif
+}
+
+template <int dim>
 std::string ElasticitySolver<dim>::presolved_mesh_fingerprint() const
 {
   // Cell geometry, connectivity, materials and boundary ids are independent of
@@ -905,6 +1087,11 @@ void ElasticitySolver<dim>::postprocess_solution()
   // Compute error *before* moving mesh for visualization (-:
   if (param.mms_param.enable)
     compute_errors();
+
+  // Evaluate on the reference mesh, including when the position came from
+  // the cache. A borrowed CHNS triangulation must remain unchanged.
+  if (param.elasticity.write_final_msh)
+    write_final_msh();
 
   if (owned_triangulation)
   {

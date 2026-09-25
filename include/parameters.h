@@ -832,6 +832,9 @@ namespace Parameters
 
   struct Elasticity
   {
+    // Write the final deformed mesh while preserving the input Gmsh entities.
+    bool write_final_msh;
+
     // If true, then the provided position source term is to be evaluated on
     // the current mesh, and not on the reference mesh where the elasticity
     // equation is solved (that is, we evaluate f(x(X)) instead of f(X).
