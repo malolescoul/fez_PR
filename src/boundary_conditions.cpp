@@ -7,6 +7,90 @@
 
 namespace BoundaryConditions
 {
+  namespace
+  {
+    // Different walls can select the same constrained component. Eliminate
+    // existing relations before adding the next wall, retaining each
+    // independent normal equation instead of dropping a duplicate pivot.
+    void add_independent_flux_constraints(
+      const AffineConstraints<double> &boundary_constraints,
+      AffineConstraints<double>       &flux_constraints)
+    {
+      // These short equations involve only the components at a support point.
+      // Reuse contiguous storage instead of allocating map nodes for each row.
+      std::vector<std::pair<types::global_dof_index, double>> coefficients,
+        pending;
+      for (const auto &line : boundary_constraints.get_lines())
+      {
+        coefficients.clear();
+        pending.clear();
+        pending.emplace_back(line.index, 1.);
+        for (const auto &[index, weight] : line.entries)
+          pending.emplace_back(index, -weight);
+        double rhs   = line.inhomogeneity;
+        double scale = 1. + std::abs(rhs);
+        while (!pending.empty())
+        {
+          const auto [index, weight] = pending.back();
+          pending.pop_back();
+          if (flux_constraints.is_constrained(index))
+          {
+            const double shift =
+              weight * flux_constraints.get_inhomogeneity(index);
+            rhs -= shift;
+            scale += std::abs(shift);
+            for (const auto &[other, coefficient] :
+                 *flux_constraints.get_constraint_entries(index))
+              pending.emplace_back(other, weight * coefficient);
+          }
+          else
+          {
+            const auto existing = std::find_if(coefficients.begin(),
+                                               coefficients.end(),
+                                               [index](const auto &entry) {
+                                                 return entry.first == index;
+                                               });
+            if (existing == coefficients.end())
+              coefficients.emplace_back(index, weight);
+            else
+              existing->second += weight;
+          }
+        }
+        std::sort(coefficients.begin(), coefficients.end());
+        auto pivot = coefficients.end();
+        for (auto it = coefficients.begin(); it != coefficients.end(); ++it)
+          if (std::abs(it->second) > 1e-12 &&
+              (pivot == coefficients.end() ||
+               std::abs(it->second) > std::abs(pivot->second) + 1e-10))
+            pivot = it;
+        if (pivot == coefficients.end())
+        {
+          AssertThrow(
+            std::abs(rhs) < 1e-12 * scale,
+            ExcMessage(
+              "Incompatible flux conditions at a boundary intersection."));
+          continue;
+        }
+        // Preserve deal.II's original pivot whenever it is still free.
+        const auto original = std::find_if(coefficients.begin(),
+                                           coefficients.end(),
+                                           [&line](const auto &entry) {
+                                             return entry.first == line.index;
+                                           });
+        if (original != coefficients.end() &&
+            std::abs(original->second) > 1e-12)
+          pivot = original;
+        flux_constraints.add_line(pivot->first);
+        flux_constraints.set_inhomogeneity(pivot->first, rhs / pivot->second);
+        for (const auto &[index, coefficient] : coefficients)
+          if (index != pivot->first && std::abs(coefficient) > 1e-12)
+            flux_constraints.add_entry(pivot->first,
+                                       index,
+                                       -coefficient / pivot->second);
+      }
+    }
+  } // namespace
+
   void BoundaryCondition::declare_parameters(ParameterHandler &prm)
   {
     prm.declare_entry(
@@ -40,6 +124,23 @@ namespace BoundaryConditions
         "velocity_mms|velocity_flux_mms|pressure_mms|open_mms|"
         "no_tangential_flow|no_tangential_flow_with_weak_pressure"),
       "Type of fluid boundary condition");
+
+    // Select which velocity components an input_function boundary constrains
+    // strongly. A component left unconstrained can instead be handled by a no
+    // normal flux added on the same boundary.
+    prm.declare_entry("constrain_u",
+                      "true",
+                      Patterns::Bool(),
+                      "Constrain x-velocity component on this boundary");
+    prm.declare_entry("constrain_v",
+                      "true",
+                      Patterns::Bool(),
+                      "Constrain y-velocity component on this boundary");
+    prm.declare_entry(
+      "constrain_w",
+      "true",
+      Patterns::Bool(),
+      "Constrain z-velocity component on this boundary (3D only)");
 
     // Imposed functions, if any
     prm.enter_subsection("u");
@@ -124,6 +225,18 @@ namespace BoundaryConditions
         "prescribed fluid boundary conditions is smaller than "
         "the specified \"number\" field.");
 
+    constrain_u = prm.get_bool("constrain_u");
+    constrain_v = prm.get_bool("constrain_v");
+    constrain_w = prm.get_bool("constrain_w");
+
+    if constexpr (dim == 2)
+      constrain_w = false;
+
+    AssertThrow(
+      type != Type::input_function || constrain_u || constrain_v || constrain_w,
+      ExcMessage("Fluid BC " + std::to_string(this->id) +
+                 ": at least one velocity component must be constrained."));
+
     prm.enter_subsection("u");
     u->parse_parameters(prm);
     prm.leave_subsection();
@@ -166,17 +279,26 @@ namespace BoundaryConditions
                       "Type of pseudosolid boundary condition");
 
     // Input component functions, same pattern as FluidBC u/v/w
-    prm.enter_subsection("x");
-    x->declare_parameters(prm);
-    prm.leave_subsection();
+    // For an input_function boundary, each component
+    // subsection may additionally set "type = no_flux" to leave that component
+    // free (handled by the pseudosolid solver) instead of constraining it to
+    // its function. The default "input_function" constrains the component.
+    const auto declare_component = [&](const std::string              &name,
+                                       Functions::ParsedFunction<dim> &fun) {
+      prm.enter_subsection(name);
+      fun.declare_parameters(prm);
+      prm.declare_entry(
+        "type",
+        "input_function",
+        Patterns::Selection("input_function|no_flux"),
+        "Per-component constraint: input_function constrains "
+        "this component to its function; no_flux leaves it free");
+      prm.leave_subsection();
+    };
 
-    prm.enter_subsection("y");
-    y->declare_parameters(prm);
-    prm.leave_subsection();
-
-    prm.enter_subsection("z");
-    z->declare_parameters(prm);
-    prm.leave_subsection();
+    declare_component("x", *x);
+    declare_component("y", *y);
+    declare_component("z", *z);
   }
 
   template <int dim>
@@ -208,17 +330,30 @@ namespace BoundaryConditions
         "prescribed pseudosolid boundary conditions is smaller than "
         "the specified \"number\" field.");
 
-    prm.enter_subsection("x");
-    x->parse_parameters(prm);
-    prm.leave_subsection();
+    // Parse each component function and its optional per-component type. A
+    // component whose type is "no_flux" is left free (not constrained to its
+    // function); the default "input_function" constrains it.
+    const auto parse_component = [&](const std::string              &name,
+                                     Functions::ParsedFunction<dim> &fun,
+                                     bool &constrain) {
+      prm.enter_subsection(name);
+      fun.parse_parameters(prm);
+      constrain = (prm.get("type") == "input_function");
+      prm.leave_subsection();
+    };
 
-    prm.enter_subsection("y");
-    y->parse_parameters(prm);
-    prm.leave_subsection();
+    parse_component("x", *x, constrain_x);
+    parse_component("y", *y, constrain_y);
+    parse_component("z", *z, constrain_z);
 
-    prm.enter_subsection("z");
-    z->parse_parameters(prm);
-    prm.leave_subsection();
+    if constexpr (dim < 3)
+      constrain_z = false;
+
+    if (type == Type::input_function)
+      AssertThrow(constrain_x || constrain_y || constrain_z,
+                  ExcMessage("Pseudosolid BC " + std::to_string(this->id) +
+                             ": at least one position component must be "
+                             "constrained."));
   }
 
   template <int dim>
@@ -321,6 +456,23 @@ namespace BoundaryConditions
     const ComponentMask              velocity_mask =
       dof_handler.get_fe().component_mask(velocity);
 
+    // Build the component mask of the velocity components an input_function
+    // boundary constrains strongly. Components left out can be handled by a no
+    // normal flux added on the same boundary.
+    const auto make_partial_velocity_mask =
+      [&](const BoundaryConditions::FluidBC<dim> &bc) -> ComponentMask {
+      std::vector<bool> mask(n_components, false);
+      if (bc.constrain_u)
+        mask[u_lower + 0] = true;
+      if constexpr (dim >= 2)
+        if (bc.constrain_v)
+          mask[u_lower + 1] = true;
+      if constexpr (dim == 3)
+        if (bc.constrain_w)
+          mask[u_lower + 2] = true;
+      return ComponentMask(mask);
+    };
+
     std::set<types::boundary_id> no_flux_boundaries;
     std::set<types::boundary_id> no_tangential_flow_boundaries;
     std::set<types::boundary_id> velocity_normal_flux_boundaries;
@@ -344,6 +496,7 @@ namespace BoundaryConditions
       }
       if (bc.type == BoundaryConditions::Type::input_function)
       {
+        const ComponentMask partial_mask = make_partial_velocity_mask(bc);
         if (homogeneous)
           VectorTools::interpolate_boundary_values(mapping,
                                                    dof_handler,
@@ -351,7 +504,7 @@ namespace BoundaryConditions
                                                    Functions::ZeroFunction<dim>(
                                                      n_components),
                                                    constraints,
-                                                   velocity_mask);
+                                                   partial_mask);
         else
           VectorTools::interpolate_boundary_values(
             mapping,
@@ -360,7 +513,7 @@ namespace BoundaryConditions
             VectorFunctionFromComponents<dim>(
               u_lower, n_components, *bc.u, *bc.v, *bc.w),
             constraints,
-            velocity_mask);
+            partial_mask);
       }
       if (bc.type == BoundaryConditions::Type::velocity_mms)
       {
@@ -397,20 +550,45 @@ namespace BoundaryConditions
     }
 
     // Add no velocity flux constraints
-    VectorTools::compute_no_normal_flux_constraints(
-      dof_handler,
-      u_lower,
-      no_flux_boundaries,
-      constraints,
-      mapping,
-      /*use_manifold_for_normal=*/false);
-    VectorTools::compute_normal_flux_constraints(
-      dof_handler,
-      u_lower,
-      no_tangential_flow_boundaries,
-      constraints,
-      mapping,
-      /*use_manifold_for_normal=*/false);
+    // deal.II averages normals from different cells within a single call.
+    // Calling once per boundary id preserves true corners where two slip
+    // boundaries meet and should jointly imply u = 0.
+    AffineConstraints<double> flux_constraints;
+    flux_constraints.reinit(constraints.get_locally_owned_indices(),
+                            constraints.get_local_lines());
+    for (const auto boundary_id : no_flux_boundaries)
+    {
+      AffineConstraints<double> boundary_constraints;
+      boundary_constraints.reinit(constraints.get_locally_owned_indices(),
+                                  constraints.get_local_lines());
+      VectorTools::compute_no_normal_flux_constraints(
+        dof_handler,
+        u_lower,
+        {boundary_id},
+        boundary_constraints,
+        mapping,
+        /*use_manifold_for_normal=*/false);
+      add_independent_flux_constraints(boundary_constraints, flux_constraints);
+    }
+
+    for (const auto boundary_id : no_tangential_flow_boundaries)
+    {
+      AffineConstraints<double> boundary_constraints;
+      boundary_constraints.reinit(constraints.get_locally_owned_indices(),
+                                  constraints.get_local_lines());
+      VectorTools::compute_normal_flux_constraints(
+        dof_handler,
+        u_lower,
+        {boundary_id},
+        boundary_constraints,
+        mapping,
+        /*use_manifold_for_normal=*/false);
+      add_independent_flux_constraints(boundary_constraints, flux_constraints);
+    }
+
+    // Keep the existing precedence of strong Dirichlet constraints.
+    constraints.merge(flux_constraints,
+                      AffineConstraints<double>::left_object_wins);
 
     VectorTools::compute_nonzero_normal_flux_constraints(
       dof_handler,
@@ -507,6 +685,24 @@ namespace BoundaryConditions
     std::set<types::boundary_id> mms_normal_flux_boundaries;
     std::map<types::boundary_id, const Function<dim> *>
       mms_position_flux_functions;
+
+    // Build the component mask of the position components an input_function
+    // boundary constrains strongly. A component left out (type = no_flux in its
+    // subsection) is determined by the pseudosolid solver instead.
+    const auto make_partial_position_mask =
+      [&](const BoundaryConditions::PseudosolidBC<dim> &bc) -> ComponentMask {
+      std::vector<bool> mask(n_components, false);
+      if (bc.constrain_x)
+        mask[x_lower + 0] = true;
+      if constexpr (dim >= 2)
+        if (bc.constrain_y)
+          mask[x_lower + 1] = true;
+      if constexpr (dim == 3)
+        if (bc.constrain_z)
+          mask[x_lower + 2] = true;
+      return ComponentMask(mask);
+    };
+
     for (const auto &[id, bc] : pseudosolid_bc)
     {
       if (bc.type == BoundaryConditions::Type::fixed)
@@ -520,9 +716,10 @@ namespace BoundaryConditions
       }
       if (bc.type == BoundaryConditions::Type::input_function)
       {
+        const ComponentMask partial_mask = make_partial_position_mask(bc);
         if (homogeneous)
           VectorTools::interpolate_boundary_values(
-            mapping, dof_handler, bc.id, zero_fun, constraints, position_mask);
+            mapping, dof_handler, bc.id, zero_fun, constraints, partial_mask);
         else
           VectorTools::interpolate_boundary_values(
             mapping,
@@ -531,7 +728,7 @@ namespace BoundaryConditions
             VectorFunctionFromComponents<dim>(
               x_lower, n_components, *bc.x, *bc.y, *bc.z),
             constraints,
-            position_mask);
+            partial_mask);
       }
       if (bc.type == BoundaryConditions::Type::position_mms)
       {
@@ -553,26 +750,48 @@ namespace BoundaryConditions
       // FIXME: Error if BC not handled?
     }
 
-    // Add position nonzero flux constraints (tangential movement)
-    VectorTools::compute_nonzero_normal_flux_constraints(
-      dof_handler,
-      x_lower,
-      normal_flux_boundaries,
-      position_flux_functions,
-      constraints,
-      mapping,
-      /*use_manifold_for_normal=*/false);
+    // Add position nonzero flux constraints (tangential movement free, normal
+    // displacement prescribed). As for the velocity flux constraints, apply
+    // one boundary id at a time so deal.II does not average normals across
+    // cells of distinct slip boundaries and lose the corner conditions.
+    AffineConstraints<double> flux_constraints;
+    flux_constraints.reinit(constraints.get_locally_owned_indices(),
+                            constraints.get_local_lines());
+    for (const auto boundary_id : normal_flux_boundaries)
+    {
+      AffineConstraints<double> boundary_constraints;
+      boundary_constraints.reinit(constraints.get_locally_owned_indices(),
+                                  constraints.get_local_lines());
+      VectorTools::compute_nonzero_normal_flux_constraints(
+        dof_handler,
+        x_lower,
+        {boundary_id},
+        {{boundary_id, position_flux_functions.at(boundary_id)}},
+        boundary_constraints,
+        mapping,
+        /*use_manifold_for_normal=*/false);
+      add_independent_flux_constraints(boundary_constraints, flux_constraints);
+    }
 
     // Add position nonzero flux constraints from manufactured solution
     // (tangential movement)
-    VectorTools::compute_nonzero_normal_flux_constraints(
-      dof_handler,
-      x_lower,
-      mms_normal_flux_boundaries,
-      mms_position_flux_functions,
-      constraints,
-      mapping,
-      /*use_manifold_for_normal=*/false);
+    for (const auto boundary_id : mms_normal_flux_boundaries)
+    {
+      AffineConstraints<double> boundary_constraints;
+      boundary_constraints.reinit(constraints.get_locally_owned_indices(),
+                                  constraints.get_local_lines());
+      VectorTools::compute_nonzero_normal_flux_constraints(
+        dof_handler,
+        x_lower,
+        {boundary_id},
+        {{boundary_id, mms_position_flux_functions.at(boundary_id)}},
+        boundary_constraints,
+        mapping,
+        /*use_manifold_for_normal=*/false);
+      add_independent_flux_constraints(boundary_constraints, flux_constraints);
+    }
+    constraints.merge(flux_constraints,
+                      AffineConstraints<double>::left_object_wins);
   }
 
   template <int dim>
