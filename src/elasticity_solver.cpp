@@ -1,5 +1,8 @@
 
 #include <assembly/elasticity_assemblers.h>
+#include <boost/archive/text_iarchive.hpp>
+#include <boost/archive/text_oarchive.hpp>
+#include <boost/serialization/vector.hpp>
 #include <compare_matrix.h>
 #include <deal.II/base/work_stream.h>
 #include <deal.II/dofs/dof_tools.h>
@@ -19,6 +22,57 @@
 #include <solver_info.h>
 #include <utilities.h>
 
+#include <array>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
+
+namespace
+{
+  // Partition-independent key of a (support point, component) pair.
+  template <int dim>
+  std::string cache_entry_key(const std::array<double, dim> &support_point,
+                              const unsigned int             component)
+  {
+    std::ostringstream key;
+    key << component << std::setprecision(17);
+    for (const double coordinate : support_point)
+      key << ":" << coordinate;
+    return key.str();
+  }
+
+  template <int dim>
+  struct PresolvedMeshCacheEntry
+  {
+    std::array<double, dim> support_point;
+    unsigned int            component;
+    double                  value;
+
+    template <class Archive>
+    void serialize(Archive &archive, const unsigned int)
+    {
+      for (auto &coordinate : support_point)
+        archive &coordinate;
+      archive &component;
+      archive &value;
+    }
+  };
+
+  std::string fingerprint_hash(const std::string &text)
+  {
+    std::uint64_t hash = 14695981039346656037ull;
+    for (unsigned char c : text)
+    {
+      hash ^= c;
+      hash *= 1099511628211ull;
+    }
+    std::ostringstream result;
+    result << std::hex << hash;
+    return result.str();
+  }
+} // namespace
 
 template <int dim>
 ElasticitySolver<dim>::ElasticitySolver(
@@ -145,6 +199,13 @@ void ElasticitySolver<dim>::run()
   create_nonzero_constraints();
   create_sparsity_pattern();
   set_initial_conditions();
+  if (param.elasticity.presolved_mesh_position_mode ==
+        Parameters::Elasticity::PresolvedMeshPositionMode::reuse &&
+      try_load_presolved_mesh_cache())
+  {
+    postprocess_solution();
+    return;
+  }
   output_results();
 
   update_boundary_conditions();
@@ -233,6 +294,12 @@ void ElasticitySolver<dim>::run()
       compare_analytical_matrix_with_fd();
     solve_nonlinear_problem(time_handler);
   }
+
+  // Store reference support points before standalone postprocessing moves the
+  // mesh.
+  if (param.elasticity.presolved_mesh_position_mode !=
+      Parameters::Elasticity::PresolvedMeshPositionMode::off)
+    write_presolved_mesh_cache();
 
   postprocess_solution();
 }
@@ -600,6 +667,209 @@ void ElasticitySolver<dim>::move_mesh()
           for (unsigned int d = 0; d < dim; ++d)
             cell->vertex(v)[d] = present_solution(cell->vertex_dof_index(v, d));
         }
+}
+
+template <int dim>
+std::string ElasticitySolver<dim>::presolved_mesh_fingerprint() const
+{
+  // Cell geometry, connectivity, materials and boundary ids are independent of
+  // the MPI partition. This also detects changes to generated/borrowed meshes.
+  std::vector<std::string> local_cells;
+  for (const auto &cell : dof_handler.active_cell_iterators())
+    if (cell->is_locally_owned())
+    {
+      std::ostringstream entry;
+      entry << std::setprecision(17) << cell->id().to_string() << ':'
+            << cell->material_id();
+      for (unsigned int v = 0; v < cell->n_vertices(); ++v)
+        for (unsigned int d = 0; d < dim; ++d)
+          entry << ':' << cell->vertex(v)[d];
+      for (unsigned int f = 0; f < cell->n_faces(); ++f)
+        entry << ':' << cell->face(f)->boundary_id();
+      local_cells.push_back(entry.str());
+    }
+  const auto gathered =
+    Utilities::MPI::gather(mpi_communicator, local_cells, 0);
+  std::string mesh_hash;
+  if (mpi_rank == 0)
+  {
+    std::vector<std::string> cells;
+    for (const auto &part : gathered)
+      cells.insert(cells.end(), part.begin(), part.end());
+    std::sort(cells.begin(), cells.end());
+    std::ostringstream mesh;
+    for (const auto &cell : cells)
+      mesh << cell << '\n';
+    mesh_hash = fingerprint_hash(mesh.str());
+  }
+  mesh_hash = Utilities::MPI::broadcast(mpi_communicator, mesh_hash, 0);
+  const auto        &ch    = param.cahn_hilliard;
+  const auto        &solid = param.physical_properties.pseudosolids[0];
+  std::ostringstream fingerprint;
+  fingerprint << std::setprecision(17)
+              << "fez-standard-presolver-v2;dim=" << dim
+              << ";mesh=" << mesh_hash << ";ndofs=" << dof_handler.n_dofs()
+              << ";input=" << param.elasticity.presolved_mesh_input_parameters
+              << ";initial_time=" << param.time_integration.t_initial
+              << ";mff=" << static_cast<int>(ch.mff_source_term)
+              << ";eps=" << ch.epsilon_interface
+              << ";compression=" << ch.mff_physics_compression_factor
+              << ";gamma=" << ch.mff_regularization_gamma;
+  // Constants may have been updated after reading the input file.
+  for (const auto &function :
+       {param.initial_conditions.initial_chns_tracer_callback,
+        solid.lame_mu_fun,
+        solid.lame_lambda_fun})
+  {
+    fingerprint << ";function=" << function->get_function_expression();
+    for (const auto &[name, value] : function->get_constants())
+      fingerprint << ';' << name << '=' << value;
+  }
+  // Transport is deliberately excluded: it is inactive in the presolver.
+  return fingerprint_hash(fingerprint.str());
+}
+
+template <int dim>
+void ElasticitySolver<dim>::write_presolved_mesh_cache() const
+{
+  const auto file = std::filesystem::path(param.output.output_dir) /
+                    param.elasticity.presolved_mesh_position_file;
+  const auto                 temporary   = file.string() + ".tmp";
+  const std::string          fingerprint = presolved_mesh_fingerprint();
+  std::vector<unsigned char> components;
+  fill_dofs_to_component(dof_handler, locally_relevant_dofs, components);
+  const auto points =
+    DoFTools::map_dofs_to_support_points(*mapping, dof_handler);
+  std::vector<PresolvedMeshCacheEntry<dim>> local_entries;
+  for (const auto i : locally_owned_dofs)
+  {
+    PresolvedMeshCacheEntry<dim> entry;
+    for (unsigned int d = 0; d < dim; ++d)
+      entry.support_point[d] = points.at(i)[d];
+    entry.component = components[locally_relevant_dofs.index_within_set(i)];
+    entry.value     = present_solution[i];
+    local_entries.push_back(entry);
+  }
+  const auto gathered =
+    Utilities::MPI::gather(mpi_communicator, local_entries, 0);
+  std::string error;
+  if (mpi_rank == 0)
+    try
+    {
+      std::vector<PresolvedMeshCacheEntry<dim>> entries;
+      for (const auto &part : gathered)
+        entries.insert(entries.end(), part.begin(), part.end());
+      {
+        std::ofstream stream(temporary);
+        stream.exceptions(std::ios::failbit | std::ios::badbit);
+        {
+          boost::archive::text_oarchive archive(stream);
+          archive << fingerprint << entries;
+        }
+        stream.close();
+      }
+      std::filesystem::rename(temporary, file);
+    }
+    catch (const std::exception &e)
+    {
+      error = e.what();
+    }
+  // Every rank must observe an I/O failure before leaving this collective path.
+  error = Utilities::MPI::broadcast(mpi_communicator, error, 0);
+  AssertThrow(error.empty(),
+              ExcMessage("Could not write presolved mesh cache: " + error));
+  pcout << "Wrote presolved mesh position cache to " << file.string()
+        << std::endl;
+}
+
+template <int dim>
+bool ElasticitySolver<dim>::try_load_presolved_mesh_cache()
+{
+  const auto file = std::filesystem::path(param.output.output_dir) /
+                    param.elasticity.presolved_mesh_position_file;
+  const std::string expected = presolved_mesh_fingerprint();
+  std::vector<PresolvedMeshCacheEntry<dim>> entries;
+  bool                                      usable = true;
+  std::string                               reason;
+  try
+  {
+    std::ifstream stream(file);
+    if (!stream)
+    {
+      usable = false;
+      reason = "missing cache file";
+    }
+    else
+    {
+      boost::archive::text_iarchive archive(stream);
+      std::string                   stored;
+      archive >> stored;
+      if (stored != expected)
+      {
+        usable = false;
+        reason = "presolver parameters or reference mesh changed";
+      }
+      else
+        archive >> entries;
+    }
+  }
+  catch (const std::exception &e)
+  {
+    usable = false;
+    reason = "invalid cache: " + std::string(e.what());
+  }
+  const auto fail = [&]() {
+    pcout << "Presolved mesh position cache cannot be reused: "
+          << (reason.empty() ? "invalid cache on another rank" : reason)
+          << std::endl;
+    return false;
+  };
+  if (!Utilities::MPI::min(usable ? 1 : 0, mpi_communicator))
+    return fail();
+  std::map<std::string, double> cached;
+  for (const auto &entry : entries)
+  {
+    bool finite = std::isfinite(entry.value);
+    for (const auto coordinate : entry.support_point)
+      finite &= std::isfinite(coordinate);
+    if (!finite || entry.component >= dim ||
+        !cached
+           .emplace(cache_entry_key<dim>(entry.support_point, entry.component),
+                    entry.value)
+           .second)
+      usable = false;
+  }
+  usable &= cached.size() == dof_handler.n_dofs();
+  std::vector<unsigned char> components;
+  fill_dofs_to_component(dof_handler, locally_relevant_dofs, components);
+  const auto points =
+    DoFTools::map_dofs_to_support_points(*mapping, dof_handler);
+  LA::ParVectorType loaded(locally_owned_dofs, mpi_communicator);
+  for (const auto i : locally_owned_dofs)
+  {
+    std::array<double, dim> point;
+    for (unsigned int d = 0; d < dim; ++d)
+      point[d] = points.at(i)[d];
+    const auto component =
+      components[locally_relevant_dofs.index_within_set(i)];
+    const auto value = cached.find(cache_entry_key<dim>(point, component));
+    if (value == cached.end())
+      usable = false;
+    else
+      loaded[i] = value->second;
+  }
+  if (!Utilities::MPI::min(usable ? 1 : 0, mpi_communicator))
+  {
+    reason = "missing, duplicated or invalid support-point values";
+    return fail();
+  }
+  loaded.compress(VectorOperation::insert);
+  local_evaluation_point = loaded;
+  present_solution       = loaded;
+  evaluation_point       = loaded;
+  pcout << "Loaded presolved mesh position cache from " << file.string()
+        << std::endl;
+  return true;
 }
 
 template <int dim>

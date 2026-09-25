@@ -1,4 +1,5 @@
 
+#include <boost/property_tree/json_parser.hpp>
 #include <field_postprocessors.h>
 #include <parameters.h>
 #include <solver_info.h>
@@ -1642,6 +1643,22 @@ namespace Parameters
           "the compression forcing up to its physical value.");
       }
       prm.leave_subsection();
+
+      prm.enter_subsection("presolved mesh position");
+      {
+        prm.declare_entry(
+          "mode",
+          "off",
+          Patterns::Selection("off|reuse|force_recompute"),
+          "Disk cache of the presolved mesh position: 'off' disables caching, "
+          "'reuse' loads a valid cache (and writes one otherwise), "
+          "'force_recompute' always re-solves and refreshes the cache.");
+        prm.declare_entry("file",
+                          "presolved_mesh_position",
+                          Patterns::Anything(),
+                          "File name of the presolved mesh position cache.");
+      }
+      prm.leave_subsection();
     }
     prm.leave_subsection();
   }
@@ -1672,8 +1689,51 @@ namespace Parameters
         presolver_continuation_steps = prm.get_integer("continuation steps");
       }
       prm.leave_subsection();
+
+      prm.enter_subsection("presolved mesh position");
+      {
+        const std::string parsed_mode = prm.get("mode");
+        if (parsed_mode == "reuse")
+          presolved_mesh_position_mode = PresolvedMeshPositionMode::reuse;
+        else if (parsed_mode == "force_recompute")
+          presolved_mesh_position_mode =
+            PresolvedMeshPositionMode::force_recompute;
+        else
+          presolved_mesh_position_mode = PresolvedMeshPositionMode::off;
+        presolved_mesh_position_file = prm.get("file");
+      }
+      prm.leave_subsection();
     }
     prm.leave_subsection();
+  }
+
+  void Elasticity::capture_presolved_mesh_inputs(const ParameterHandler &prm)
+  {
+    presolved_mesh_input_parameters.clear();
+    if (presolved_mesh_position_mode == PresolvedMeshPositionMode::off)
+      return;
+    // Preserve the complete function descriptions, including constants and
+    // per-component boundary masks, instead of hashing expressions alone.
+    std::stringstream serialized;
+    prm.print_parameters(serialized, ParameterHandler::ShortJSON);
+    boost::property_tree::ptree all, relevant;
+    boost::property_tree::read_json(serialized, all);
+    for (const std::string section : {"Mesh",
+                                      "FiniteElements",
+                                      "Physical properties",
+                                      "Pseudosolid boundary conditions",
+                                      "Elasticity",
+                                      "Nonlinear solver",
+                                      "Manufactured solution"})
+      relevant.add_child(section, all.get_child(section));
+    relevant.get_child("Elasticity").erase("presolved mesh position");
+    relevant.add_child(
+      "phase", all.get_child("Initial conditions.cahn hilliard tracer"));
+    relevant.add_child("linear solver",
+                       all.get_child("Linear solver.elasticity"));
+    std::ostringstream canonical;
+    boost::property_tree::write_json(canonical, relevant, false);
+    presolved_mesh_input_parameters = canonical.str();
   }
 
   void CheckpointRestart::declare_parameters(ParameterHandler &prm)

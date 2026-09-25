@@ -136,6 +136,27 @@ public:
 
   void move_mesh();
 
+  /**
+   * Try to load the presolved mesh position from the disk cache. The cache is
+   * keyed by support-point location (so it is reusable with a different number
+   * of MPI processes) and guarded by a fingerprint of the presolver-defining
+   * parameters. Returns true on success; on failure it falls back to solving
+   * on an absent, stale or invalid cache. The reference mesh and DoFs must
+   * already be initialized.
+   */
+  bool try_load_presolved_mesh_cache();
+
+  /**
+   * Write the presolved mesh position to the disk cache.
+   */
+  void write_presolved_mesh_cache() const;
+
+  /**
+   * Canonical fingerprint of all parameters that affect the presolved mesh
+   * position, used to invalidate a stale cache. Requires the DoFs to be set up.
+   */
+  std::string presolved_mesh_fingerprint() const;
+
   void postprocess_solution();
 
   void compute_errors();

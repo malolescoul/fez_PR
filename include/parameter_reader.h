@@ -206,6 +206,7 @@ public:
     stabilization.read_parameters(prm);
     cahn_hilliard.read_parameters(prm);
     elasticity.read_parameters(prm);
+    elasticity.capture_presolved_mesh_inputs(prm);
     source_terms.read_parameters(prm);
     mms_param.read_parameters(prm);
     mms.read_parameters(prm);
