@@ -395,6 +395,15 @@ namespace NavierStokesScratch
     tracer.component = phi_lower = ordering.phi_lower;
     potential.component = mu_lower = ordering.mu_lower;
 
+    if constexpr (enable_enlarged)
+    {
+      AssertThrow(
+        ordering.psi_lower != numbers::invalid_unsigned_int,
+        ExcMessage("Cannot create enlarged ScratchData because the solver does "
+                   "not have an enlarged tracer (psi) variable."));
+      psi.component = psi_lower = ordering.psi_lower;
+    }
+
     const auto &pp = param.physical_properties;
     const auto &ch = param.cahn_hilliard;
 
@@ -410,6 +419,12 @@ namespace NavierStokesScratch
     diffusive_flux_factor = mobility * 0.5 * (density1 - density0);
     body_force            = pp.body_force;
     tracer_limiter        = CahnHilliard::get_limiter_function(ch);
+    if constexpr (enable_enlarged)
+    {
+      const double length      = ch.psi_interface_width_factor * epsilon;
+      psi_length_scale_sq      = length * length;
+      psi_mu_correction_factor = ch.psi_mu_correction_factor;
+    }
   }
 
   template <int dim, unsigned int update_flags>
@@ -666,6 +681,17 @@ namespace NavierStokesScratch
 
       source_term_tracer.resize(n_q_points);
       source_term_potential.resize(n_q_points);
+
+      if constexpr (enable_enlarged)
+      {
+        psi_values.resize(n_q_points);
+        psi_gradients.resize(n_q_points);
+        shape_psi.resize(n_q_points, std::vector<double>(max_dofs_per_cell));
+        grad_shape_psi.resize(n_q_points,
+                              std::vector<Tensor<1, dim>>(max_dofs_per_cell));
+        source_term_psi.resize(n_q_points);
+        grad_source_psi.resize(n_q_points);
+      }
     }
 
     if constexpr (enable_compressible)
@@ -751,4 +777,8 @@ namespace NavierStokesScratch
   // Incompressible CHNS with mesh movement
   template class ScratchData<2, cahn_hilliard | pseudo_solid>;
   template class ScratchData<3, cahn_hilliard | pseudo_solid>;
+
+  // Enlarged incompressible CHNS with mesh movement
+  template class ScratchData<2, cahn_hilliard | pseudo_solid | enlarged>;
+  template class ScratchData<3, cahn_hilliard | pseudo_solid | enlarged>;
 } // namespace NavierStokesScratch
