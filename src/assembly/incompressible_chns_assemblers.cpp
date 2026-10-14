@@ -85,6 +85,10 @@ namespace Assembly
         const auto &source_phi     = sd.source_term_tracer[q];
         const auto &source_mu      = sd.source_term_potential[q];
 
+        auto supg_velocity = u_conv;
+        if constexpr (BaseType::with_stabilization)
+          supg_velocity += (sd.diffusive_flux_factor / rho) * grad_mu;
+
         const auto to_mult_by_phi_u_i =
           rho * (dudt + grad_u * u_conv - body_force) + diffusive_flux +
           phi * grad_mu + source_u;
@@ -112,8 +116,9 @@ namespace Assembly
           const double detadphi = sd.derivative_dynamic_viscosity_wrt_tracer[q];
 
           // Compute strong residual of the momentum equation, in force units
-          // (i.e. multiplied by the density). The consistent SUPG and PSPG test
-          // operators are then (u_conv . grad(v)) and grad(q) / rho.
+          // (i.e. multiplied by the density). The SUPG and PSPG test operators
+          // are ((u_conv + J/rho) . grad(v)) and grad(q) / rho.
+          // Tau keeps its existing definition based on u_conv.
           strong_residual_momentum =
             rho * (dudt + grad_u * u_conv - body_force) + diffusive_flux +
             phi * grad_mu + grad_p + source_u - eta * (lap_u + grad_div_u) -
@@ -149,8 +154,8 @@ namespace Assembly
 
             if constexpr (BaseType::with_stabilization)
               // SUPG stabilization
-              local_rhs_i -=
-                tau * (strong_residual_momentum * (grad_phi_u[i] * u_conv));
+              local_rhs_i -= tau * (strong_residual_momentum *
+                                    (grad_phi_u[i] * supg_velocity));
           }
 
           // Continuity equation
@@ -215,10 +220,18 @@ namespace Assembly
       Tensor<1, dim>      strong_residual_momentum;
       Tensor<1, dim>      strong_residual_momentum_variation_phi_phi;
       double              strong_residual_tracer;
-      Tensor<1, dim>      u_conv_dot_grad_phi_u_i, residual_dot_grad_phi_u_i;
+      Tensor<1, dim>      supg_velocity_dot_grad_phi_u_i;
+      Tensor<1, dim>      residual_dot_grad_phi_u_i;
       double              u_conv_dot_grad_phi_phi_i;
       Tensor<1, dim>      residual_tracer_dot_grad_phi_phi_i;
       double              tau, tau_tracer;
+
+      std::vector<Tensor<1, dim>> supg_velocity_variation(
+        BaseType::with_stabilization ? sd.dofs_per_cell : 0);
+      std::vector<Tensor<1, dim>> supg_velocity_x_variation(
+        BaseType::with_stabilization && BaseType::with_moving_mesh ?
+          sd.dofs_per_cell :
+          0);
 
       const auto u_lower = this->ordering.u_lower;
 
@@ -296,6 +309,10 @@ namespace Assembly
         const double source_phi     = sd.source_term_tracer[q];
         const double source_mu      = sd.source_term_potential[q];
 
+        auto supg_velocity = u_conv;
+        if constexpr (BaseType::with_stabilization)
+          supg_velocity += (diffusive_flux_factor / rho) * grad_mu;
+
         const auto &phi_u            = sd.phi_u[q];
         const auto &grad_phi_u       = sd.grad_phi_u[q];
         const auto &sym_grad_phi_u   = sd.sym_grad_phi_u[q];
@@ -370,6 +387,10 @@ namespace Assembly
             dphidt + u_conv * grad_phi - mobility * lap_mu + source_phi;
         }
 
+        // Clipping phi makes the density constant outside [-1, 1].
+        const double supg_dinvrho_dphi =
+          sd.tracer_limiter(phi) != phi ? 0. : dinvrho_dphi;
+
         // Precompute quantities depending only on j
         for (unsigned int j = 0; j < sd.dofs_per_cell; ++j)
         {
@@ -390,6 +411,15 @@ namespace Assembly
 
           to_mult_by_phi_phi_i[j] =
             bdf_c0 * phi_phi[j] + u_conv * grad_phi_phi[j];
+
+          if constexpr (BaseType::with_stabilization)
+          {
+            // Tau stays frozen, but the direction depends on u, phi and mu.
+            supg_velocity_variation[j] =
+              phi_u_j + diffusive_flux_factor *
+                          (inv_rho * grad_phi_mu_j +
+                           supg_dinvrho_dphi * phi_phi[j] * grad_mu);
+          }
 
           if constexpr (BaseType::with_stabilization)
           {
@@ -503,6 +533,9 @@ namespace Assembly
               const auto dgrad_phi_dx = -(transpose_G * grad_phi);
 
               convective_velocity_x_variation[j] = du_conv_dx;
+              if constexpr (BaseType::with_stabilization)
+                supg_velocity_x_variation[j] =
+                  du_conv_dx + diffusive_flux_factor * inv_rho * dgrad_mu_dx;
 
               // Variation of the momentum stabilization term w.r.t. position
               if constexpr (BaseType::with_stabilization)
@@ -613,7 +646,7 @@ namespace Assembly
           {
             if constexpr (BaseType::with_stabilization)
             {
-              u_conv_dot_grad_phi_u_i = grad_phi_u_i * u_conv;
+              supg_velocity_dot_grad_phi_u_i = grad_phi_u_i * supg_velocity;
               residual_dot_grad_phi_u_i =
                 strong_residual_momentum * grad_phi_u_i;
             }
@@ -656,11 +689,12 @@ namespace Assembly
 
               if constexpr (BaseType::with_stabilization)
               {
-                // SUPG stabilization : variation w.r.t. u and p
+                // SUPG stabilization : variation w.r.t. u, p, phi and mu
                 local_matrix_ij +=
                   tau * (strong_residual_momentum_variation[j] *
-                           u_conv_dot_grad_phi_u_i +
-                         residual_dot_grad_phi_u_i * phi_u[j]);
+                           supg_velocity_dot_grad_phi_u_i +
+                         residual_dot_grad_phi_u_i *
+                           supg_velocity_variation[j]);
               }
 
               if constexpr (BaseType::with_moving_mesh)
@@ -687,13 +721,12 @@ namespace Assembly
                   {
                     const auto &G = sd.grad_phi_x_moving[q][j];
                     local_matrix_ij +=
-                      tau *
-                      (u_conv_dot_grad_phi_u_i *
-                         strong_residual_momentum_x_variation[j] +
-                       strong_residual_momentum *
-                         (-(grad_phi_u_i * G) * u_conv +
-                          grad_phi_u_i * convective_velocity_x_variation[j] +
-                          u_conv_dot_grad_phi_u_i * trace(G)));
+                      tau * (supg_velocity_dot_grad_phi_u_i *
+                               strong_residual_momentum_x_variation[j] +
+                             strong_residual_momentum *
+                               (-(grad_phi_u_i * G) * supg_velocity +
+                                grad_phi_u_i * supg_velocity_x_variation[j] +
+                                supg_velocity_dot_grad_phi_u_i * trace(G)));
                   }
                 }
               }
