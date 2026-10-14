@@ -1,6 +1,7 @@
 #ifndef POSTPROCESSORS_AND_EVALUATORS_H
 #define POSTPROCESSORS_AND_EVALUATORS_H
 
+#include <cahn_hilliard.h>
 #include <components_ordering.h>
 #include <deal.II/dofs/dof_handler.h>
 #include <deal.II/fe/fe.h>
@@ -258,6 +259,222 @@ namespace PostProcessingTools
      * the criterion from them.
      */
     std::vector<Tensor<2, dim>> velocity_gradients;
+  };
+
+  /** Reconstruct the CHNS mixture density at quadrature points. */
+  template <int dim>
+  class DensityEvaluator
+  {
+  public:
+    static constexpr unsigned int n_components = 1;
+    using quantity_type                        = double;
+    using shape_type                           = double;
+
+    DensityEvaluator(const ComponentOrdering    &ordering,
+                     const ParameterReader<dim> &parameters)
+      : param(parameters.postprocessing.density)
+      , tracer_extractor(ordering.phi_lower)
+      , tracer_limiter(
+          CahnHilliard::get_limiter_function(parameters.cahn_hilliard))
+    {
+      AssertThrow(ordering.phi_lower != numbers::invalid_unsigned_int,
+                  ExcMessage("Density postprocessing requires a CHNS tracer."));
+      AssertThrow(parameters.physical_properties.fluids.size() >= 2,
+                  ExcMessage("Density postprocessing requires two fluids."));
+      density_0 = parameters.physical_properties.fluids[0].density;
+      density_1 = parameters.physical_properties.fluids[1].density;
+    }
+
+    void reinit(const PostprocessorAtDofBase<dim> &projection_base)
+    {
+      tracer_values.resize(projection_base.get_n_q_points());
+    }
+
+    std::vector<std::string> get_data_names() const { return {"density"}; }
+
+    std::vector<DataComponentInterpretation::DataComponentInterpretation>
+    get_components_interpretation() const
+    {
+      return {DataComponentInterpretation::component_is_scalar};
+    }
+
+    UpdateFlags get_main_solver_update_flags() const { return update_values; }
+
+    template <typename VectorType, typename FEValuesType>
+    void evaluate_quantity(const VectorType           &solution,
+                           const FEValuesType         &fe_values,
+                           std::vector<quantity_type> &computed_values)
+    {
+      AssertDimension(computed_values.size(), tracer_values.size());
+      fe_values[tracer_extractor].get_function_values(solution, tracer_values);
+      for (unsigned int q = 0; q < computed_values.size(); ++q)
+        computed_values[q] = evaluate_density(tracer_values[q]);
+    }
+
+    /** Same material law for quadrature and direct visualization output. */
+    double evaluate_density(const double tracer) const
+    {
+      const double marker = tracer_limiter(tracer);
+      return CahnHilliard::linear_mixing(marker, density_0, density_1);
+    }
+
+    shape_type get_quantity(const std::vector<quantity_type> &values,
+                            const unsigned int                index) const
+    {
+      return values[index];
+    }
+
+    const Parameters::PostProcessing::PostProcessingField &param;
+
+  private:
+    FEValuesExtractors::Scalar          tracer_extractor;
+    double                              density_0;
+    double                              density_1;
+    CahnHilliard::TracerLimiterFunction tracer_limiter;
+    std::vector<double>                 tracer_values;
+  };
+
+  /** Evaluate density directly from the tracer at visualization points. */
+  template <int dim>
+  class DensityPostProcessor : public DataPostprocessorScalar<dim>
+  {
+  public:
+    DensityPostProcessor(const ComponentOrdering    &ordering,
+                         const ParameterReader<dim> &parameters)
+      : DataPostprocessorScalar<dim>("density", update_values)
+      , phi_lower(ordering.phi_lower)
+      , evaluator(ordering, parameters)
+    {}
+
+    void evaluate_vector_field(
+      const DataPostprocessorInputs::Vector<dim> &input_data,
+      std::vector<Vector<double>> &computed_quantities) const override
+    {
+      AssertDimension(input_data.solution_values.size(),
+                      computed_quantities.size());
+      for (unsigned int p = 0; p < computed_quantities.size(); ++p)
+      {
+        AssertIndexRange(phi_lower, input_data.solution_values[p].size());
+        AssertDimension(computed_quantities[p].size(), 1);
+        computed_quantities[p][0] =
+          evaluator.evaluate_density(input_data.solution_values[p][phi_lower]);
+      }
+    }
+
+  private:
+    const unsigned int          phi_lower;
+    const DensityEvaluator<dim> evaluator;
+  };
+
+  /** Evaluate mobility on the physical fields, using the same law as assembly.
+   */
+  template <int dim>
+  class MobilityEvaluator
+  {
+  public:
+    static constexpr unsigned int n_components = 1;
+    using quantity_type                        = double;
+    using shape_type                           = double;
+
+    MobilityEvaluator(const ComponentOrdering    &ordering,
+                      const ParameterReader<dim> &parameters)
+      : param(parameters.postprocessing.mobility)
+      , cahn_hilliard(parameters.cahn_hilliard)
+      , velocity_extractor(ordering.u_lower)
+      , tracer_extractor(ordering.phi_lower)
+      , adaptive(CahnHilliard::is_adaptive_mobility_model(cahn_hilliard))
+      , degenerate(cahn_hilliard.mobility_model ==
+                   Parameters::CahnHilliard<dim>::MobilityModel::degenerate)
+      , gradient_dependent(cahn_hilliard.mobility_model ==
+                           Parameters::CahnHilliard<
+                             dim>::MobilityModel::adaptive_normal_velocity)
+      , mobility_function(
+          CahnHilliard::get_mobility_evaluation_function(cahn_hilliard))
+    {
+      AssertThrow(
+        ordering.u_lower != numbers::invalid_unsigned_int &&
+          ordering.phi_lower != numbers::invalid_unsigned_int,
+        ExcMessage(
+          "Mobility postprocessing requires CHNS velocity and tracer."));
+    }
+
+    void reinit(const PostprocessorAtDofBase<dim> &projection_base)
+    {
+      if (degenerate)
+        tracer_values.resize(projection_base.get_n_q_points());
+      if (adaptive)
+        velocity_values.resize(projection_base.get_n_q_points());
+      if (gradient_dependent)
+        tracer_gradients.resize(projection_base.get_n_q_points());
+    }
+
+    std::vector<std::string> get_data_names() const { return {"mobility"}; }
+
+    std::vector<DataComponentInterpretation::DataComponentInterpretation>
+    get_components_interpretation() const
+    {
+      return {DataComponentInterpretation::component_is_scalar};
+    }
+
+    UpdateFlags get_main_solver_update_flags() const
+    {
+      return gradient_dependent ? update_values | update_gradients :
+                                  update_values;
+    }
+
+    template <typename VectorType, typename FEValuesType>
+    void evaluate_quantity(const VectorType           &solution,
+                           const FEValuesType         &fe_values,
+                           std::vector<quantity_type> &computed_values)
+    {
+      if (!adaptive && !degenerate)
+      {
+        std::fill(computed_values.begin(),
+                  computed_values.end(),
+                  cahn_hilliard.mobility);
+        return;
+      }
+      if (adaptive)
+        fe_values[velocity_extractor].get_function_values(solution,
+                                                          velocity_values);
+      if (degenerate)
+        fe_values[tracer_extractor].get_function_values(solution,
+                                                        tracer_values);
+      if (gradient_dependent)
+        fe_values[tracer_extractor].get_function_gradients(solution,
+                                                           tracer_gradients);
+      const auto scaling =
+        CahnHilliard::get_adaptive_mobility_scaling(cahn_hilliard);
+      for (unsigned int q = 0; q < computed_values.size(); ++q)
+        computed_values[q] =
+          mobility_function(cahn_hilliard,
+                            degenerate ? tracer_values[q] : 0.,
+                            adaptive ? velocity_values[q] : Tensor<1, dim>(),
+                            gradient_dependent ? tracer_gradients[q] :
+                                                 Tensor<1, dim>(),
+                            scaling)
+            .value;
+    }
+
+    shape_type get_quantity(const std::vector<quantity_type> &values,
+                            const unsigned int                index) const
+    {
+      return values[index];
+    }
+
+    const Parameters::PostProcessing::PostProcessingField &param;
+
+  private:
+    const Parameters::CahnHilliard<dim>          &cahn_hilliard;
+    FEValuesExtractors::Vector                    velocity_extractor;
+    FEValuesExtractors::Scalar                    tracer_extractor;
+    const bool                                    adaptive;
+    const bool                                    degenerate;
+    std::vector<double>                           tracer_values;
+    const bool                                    gradient_dependent;
+    CahnHilliard::MobilityEvaluationFunction<dim> mobility_function;
+    std::vector<Tensor<1, dim>>                   velocity_values;
+    std::vector<Tensor<1, dim>>                   tracer_gradients;
   };
 
   /**

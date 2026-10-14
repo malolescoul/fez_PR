@@ -83,8 +83,9 @@ subsection Physical properties
 end
 
 subsection Cahn Hilliard
-  set mobility model        = constant
-  set mobility              = 0.4
+  subsection mobility
+    set constant value = 0.4
+  end
   set surface tension       = 1.1
   set interface thickness   = 1
   set enable tracer limiter = false

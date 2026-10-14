@@ -62,8 +62,9 @@ subsection Physical properties
 end
 
 subsection Cahn Hilliard
-  set mobility model      = constant
-  set mobility            = 9e-7
+  subsection mobility
+    set constant value = 9e-7
+  end
   set surface tension     = 1
   set interface thickness = 3e-3
 end

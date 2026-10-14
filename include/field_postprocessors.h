@@ -36,7 +36,9 @@ namespace PostProcessingTools
   {
     vorticity,
     q_criterion,
-    mesh_velocity
+    mesh_velocity,
+    density,
+    mobility
   };
 
   /**
@@ -52,6 +54,10 @@ namespace PostProcessingTools
         return "Q criterion";
       case PostprocessorAtDofTypes::mesh_velocity:
         return "mesh velocity";
+      case PostprocessorAtDofTypes::density:
+        return "density";
+      case PostprocessorAtDofTypes::mobility:
+        return "mobility";
     }
     // Cannot reach here
     DEAL_II_ASSERT_UNREACHABLE();

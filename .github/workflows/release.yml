@@ -32,7 +32,7 @@ jobs:
         - dealii_version: master-noble
           ctest_exclude: "^$"
         - dealii_version: v9.7.1-noble
-          ctest_exclude: "^incompressible_chns_ale/.*stabilized.*$"
+          ctest_exclude: "^incompressible_chns_ale(_enlarged)?/.*stabilized.*$"
 
     container:
       image: dealii/dealii:${{ matrix.dealii_version }}

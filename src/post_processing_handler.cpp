@@ -44,6 +44,11 @@ PostProcessingHandler<dim>::PostProcessingHandler(
     using PP       = Parameters::PostProcessing;
 
     postprocessors.clear();
+    if (pp.density.enable &&
+        pp.density.method == PP::Density::ComputationMethod::discontinuous)
+      postprocessors.emplace_back(
+        std::make_unique<PostProcessingTools::DensityPostProcessor<dim>>(
+          ordering, param));
     if (pp.vorticity.enable and
         pp.vorticity.method == PP::Vorticity::ComputationMethod::discontinuous)
       postprocessors.emplace_back(
@@ -344,6 +349,7 @@ PostProcessingHandler<dim>::create_field_postprocessor(
   using namespace PostProcessingTools;
   using Vorticity  = Parameters::PostProcessing::Vorticity;
   using QCriterion = Parameters::PostProcessing::QCriterion;
+  using Field      = Parameters::PostProcessing::PostProcessingField;
 
   switch (type)
   {
@@ -409,6 +415,65 @@ PostProcessingHandler<dim>::create_field_postprocessor(
     case PostprocessorAtDofTypes::mesh_velocity:
       return std::make_unique<MeshVelocityPostprocessor<dim>>(
         ordering, param, mapping, *dof_handler, cell_quadrature);
+    case PostprocessorAtDofTypes::density:
+      switch (param.postprocessing.density.method)
+      {
+        case Field::ComputationMethod::l2_projection:
+          return std::make_unique<
+            FieldPostprocessorGenerator<dim, DensityEvaluator, L2Projection>>(
+            param,
+            ordering,
+            mapping,
+            *dof_handler,
+            cell_quadrature,
+            with_moving_mesh);
+        case Field::ComputationMethod::weighted_average:
+          return std::make_unique<FieldPostprocessorGenerator<dim,
+                                                              DensityEvaluator,
+                                                              WeightedAverage>>(
+            param,
+            ordering,
+            mapping,
+            *dof_handler,
+            cell_quadrature,
+            with_moving_mesh);
+        case Field::ComputationMethod::discontinuous:
+          // Direct visualization is handled by the DataPostprocessor created
+          // in the constructor; no projected field is needed.
+          return nullptr;
+      }
+      DEAL_II_ASSERT_UNREACHABLE();
+      return nullptr;
+    case PostprocessorAtDofTypes::mobility:
+      switch (param.postprocessing.mobility.method)
+      {
+        case Field::ComputationMethod::l2_projection:
+          return std::make_unique<
+            FieldPostprocessorGenerator<dim, MobilityEvaluator, L2Projection>>(
+            param,
+            ordering,
+            mapping,
+            *dof_handler,
+            cell_quadrature,
+            with_moving_mesh);
+        case Field::ComputationMethod::weighted_average:
+          return std::make_unique<FieldPostprocessorGenerator<dim,
+                                                              MobilityEvaluator,
+                                                              WeightedAverage>>(
+            param,
+            ordering,
+            mapping,
+            *dof_handler,
+            cell_quadrature,
+            with_moving_mesh);
+        case Field::ComputationMethod::discontinuous:
+          AssertThrow(false,
+                      ExcMessage("Mobility postprocessing supports 'l2 "
+                                 "projection' and 'weighted average'."));
+          return nullptr;
+      }
+      DEAL_II_ASSERT_UNREACHABLE();
+      return nullptr;
     default:
       DEAL_II_NOT_IMPLEMENTED();
   }
