@@ -3,6 +3,8 @@ namespace Assembly
 {
   namespace Elasticity
   {
+    template class PresolverPsiAssembler<2, ScratchDataElasticity<2>, CopyDataBase<>>;
+    template class PresolverPsiAssembler<3, ScratchDataElasticity<3>, CopyDataBase<>>;
     // Instantiation for elasticity solver
     template class LinearElasticityAssembler<2,
                                    ScratchDataElasticity<2>,

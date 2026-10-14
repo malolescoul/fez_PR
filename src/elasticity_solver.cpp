@@ -37,6 +37,40 @@
 
 namespace
 {
+  // Append a zero marker component to a position function. deal.II requires
+  // the full FE component count even when interpolation selects only position.
+  template <int dim>
+  class PositionWithMarker : public Function<dim>
+  {
+  public:
+    explicit PositionWithMarker(std::shared_ptr<Function<dim>> position)
+      : Function<dim>(dim + 1)
+      , position(std::move(position))
+    {}
+
+    double value(const Point<dim>  &p,
+                 const unsigned int component = 0) const override
+    {
+      return component < dim ? position->value(p, component) : 0.;
+    }
+
+    Tensor<1, dim> gradient(const Point<dim>  &p,
+                            const unsigned int component = 0) const override
+    {
+      return component < dim ? position->gradient(p, component) :
+                               Tensor<1, dim>();
+    }
+
+    void set_time(const double time) override
+    {
+      Function<dim>::set_time(time);
+      position->set_time(time);
+    }
+
+  private:
+    const std::shared_ptr<Function<dim>> position;
+  };
+
   // Partition-independent key of a (support point, component) pair.
   template <int dim>
   std::string cache_entry_key(const std::array<double, dim> &support_point,
@@ -83,7 +117,8 @@ namespace
 template <int dim>
 ElasticitySolver<dim>::ElasticitySolver(
   const ParameterReader<dim>                  &param,
-  parallel::DistributedTriangulationBase<dim> *reference_triangulation)
+  parallel::DistributedTriangulationBase<dim> *reference_triangulation,
+  const bool                                   with_enlarged_psi)
   : GenericSolver<LA::ParVectorType>(param.output,
                                      param.nonlinear_solver,
                                      param.timer,
@@ -91,7 +126,8 @@ ElasticitySolver<dim>::ElasticitySolver(
                                      param.time_integration,
                                      param.mms_param,
                                      SolverInfo::SolverType::elasticity)
-  , ordering(ComponentOrderingElasticity<dim>())
+  , ordering(ComponentOrderingElasticity<dim>(with_enlarged_psi))
+  , with_enlarged_psi(with_enlarged_psi)
   , param(param)
   , owned_triangulation(
       reference_triangulation ?
@@ -132,15 +168,27 @@ ElasticitySolver<dim>::ElasticitySolver(
   {
     mapping =
       std::make_unique<MappingQ<dim>>(param.finite_elements.mapping_degree);
-    fe = std::make_unique<FESystem<dim>>(
-      FE_Q<dim>(param.finite_elements.mesh_position_degree) ^ dim);
+    if (with_enlarged_psi)
+      fe = std::make_unique<FESystem<dim>>(
+        FESystem<dim>(FE_Q<dim>(param.finite_elements.mesh_position_degree) ^
+                      dim),
+        FE_Q<dim>(param.finite_elements.tracer_degree));
+    else
+      fe = std::make_unique<FESystem<dim>>(
+        FE_Q<dim>(param.finite_elements.mesh_position_degree) ^ dim);
   }
   else
   {
     mapping = std::make_unique<MappingFE<dim>>(
       FE_SimplexP<dim>(param.finite_elements.mapping_degree));
-    fe = std::make_unique<FESystem<dim>>(
-      FE_SimplexP<dim>(param.finite_elements.mesh_position_degree) ^ dim);
+    if (with_enlarged_psi)
+      fe = std::make_unique<FESystem<dim>>(
+        FESystem<dim>(
+          FE_SimplexP<dim>(param.finite_elements.mesh_position_degree) ^ dim),
+        FE_SimplexP<dim>(param.finite_elements.tracer_degree));
+    else
+      fe = std::make_unique<FESystem<dim>>(
+        FE_SimplexP<dim>(param.finite_elements.mesh_position_degree) ^ dim);
   }
 
   position_extractor = FEValuesExtractors::Vector(0);
@@ -164,12 +212,15 @@ ElasticitySolver<dim>::ElasticitySolver(
     exact_solution = std::make_shared<Functions::ZeroFunction<dim>>(dim);
   }
 
+  if (with_enlarged_psi)
+    exact_solution = std::make_shared<PositionWithMarker<dim>>(exact_solution);
+
   // Create direct solver
   direct_solver_reuse =
     std::make_unique<PETScWrappers::SparseDirectMUMPSReuse>(solver_control);
 
   scratch_data = std::make_unique<ScratchData>(
-    *fe, *mapping, *quadrature, *face_quadrature, param);
+    *fe, *mapping, *quadrature, *face_quadrature, param, with_enlarged_psi);
 }
 
 template <int dim>
@@ -373,7 +424,7 @@ void ElasticitySolver<dim>::create_base_constraints(
   BoundaryConditions::apply_mesh_position_boundary_conditions(
     homogeneous,
     0,
-    dim,
+    ordering.n_components,
     dof_handler,
     *mapping,
     param.pseudosolid_bc,
@@ -417,7 +468,8 @@ void ElasticitySolver<dim>::create_sparsity_pattern()
 template <int dim>
 void ElasticitySolver<dim>::set_initial_conditions()
 {
-  FixedMeshPosition<dim> fixed_mesh(0, dim);
+  newton_update = 0.;
+  FixedMeshPosition<dim> fixed_mesh(0, ordering.n_components);
   VectorTools::interpolate(
     *mapping, dof_handler, fixed_mesh, newton_update, position_mask);
   evaluation_point = newton_update;
@@ -622,6 +674,12 @@ void ElasticitySolver<dim>::output_results(const Mapping<dim> *output_mapping)
     std::vector<DataComponentInterpretation::DataComponentInterpretation>
       data_component_interpretation(
         dim, DataComponentInterpretation::component_is_part_of_vector);
+    if (with_enlarged_psi)
+    {
+      solution_names.emplace_back("psi");
+      data_component_interpretation.push_back(
+        DataComponentInterpretation::component_is_scalar);
+    }
     DataOut<dim> data_out;
     data_out.attach_dof_handler(dof_handler);
     data_out.add_data_vector(present_solution,
@@ -865,6 +923,13 @@ std::string ElasticitySolver<dim>::presolved_mesh_fingerprint() const
               << ";eps=" << ch.epsilon_interface
               << ";compression=" << ch.mff_physics_compression_factor
               << ";gamma=" << ch.mff_regularization_gamma;
+  if (with_enlarged_psi)
+    fingerprint << ";enlarged=1;psi_degree="
+                << param.finite_elements.tracer_degree
+                << ";psi_width=" << ch.psi_interface_width_factor
+                << ";enlarged_compression="
+                << ch.mff_enlarged_compression_factor
+                << ";lobe_exponent=" << ch.mff_enlarged_lobe_position_exponent;
   // Constants may have been updated after reading the input file.
   for (const auto &function :
        {param.initial_conditions.initial_chns_tracer_callback,
@@ -982,7 +1047,7 @@ bool ElasticitySolver<dim>::try_load_presolved_mesh_cache()
     bool finite = std::isfinite(entry.value);
     for (const auto coordinate : entry.support_point)
       finite &= std::isfinite(coordinate);
-    if (!finite || entry.component >= dim ||
+    if (!finite || entry.component >= ordering.n_components ||
         !cached
            .emplace(cache_entry_key<dim>(entry.support_point, entry.component),
                     entry.value)
@@ -1029,7 +1094,8 @@ void ElasticitySolver<dim>::compute_errors()
 
   const unsigned int n_active_cells = triangulation.n_active_cells();
   Vector<double>     cellwise_errors(n_active_cells);
-  const ComponentSelectFunction<dim> position_comp_select(0, dim);
+  const ComponentSelectFunction<dim> position_comp_select(
+    0, ordering.n_components);
 
   for (auto &[norm, handler] : error_handlers)
   {
