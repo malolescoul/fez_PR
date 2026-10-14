@@ -1,0 +1,50 @@
+Number of MPI processes: 1
+Mesh info:
+ dimension: 2
+ no. of cells: 8
+ boundary indicators: 0(2 faces) 1(2 faces) 2(2 faces) 3(2 faces)
+ID 0 -> x_min
+ID 1 -> x_max
+ID 2 -> y_min
+ID 3 -> y_max
+Number of degrees of freedom: 109
+
+Time step 1 - Advancing to t = 0.001.
+Max absolute error analytical vs fd matrix is 2.00842e-07
+Newton iter.  0:          nonlinear residual = 2.48821414e-01
+	Line search with alpha = 1.000 : res = 2.60829328e-03
+Newton iter.  1:          nonlinear residual = 2.60829328e-03	(M)
+	Line search with alpha = 1.000 : res = 1.11075567e-08
+Newton iter.  2:          nonlinear residual = 1.11075567e-08	(M)
+	Line search with alpha = 1.000 : res = 1.85690480e-14
+Stopping because residual is below prescribed tolerance (1.00e-10)
+
+Time step 2 - Advancing to t = 1.00e-02.
+Max absolute error analytical vs fd matrix is 1.45e-07
+Newton iter.  0:          nonlinear residual = 9.82373134e-01
+	Line search with alpha = 1.000 : res = 9.27951311e-03
+Newton iter.  1:          nonlinear residual = 9.27951311e-03	(M)
+	Line search with alpha = 1.000 : res = 7.95582079e-07
+Newton iter.  2:          nonlinear residual = 7.95582079e-07	(M)
+	Line search with alpha = 1.000 : res = 2.93570049e-11
+Stopping because residual is below prescribed tolerance (1.00e-10)
+
+Time step 3 - Advancing to t = 2.00e-02.
+Max absolute error analytical vs fd matrix is 2.64e-08
+Newton iter.  0:          nonlinear residual = 4.99871489e-01
+	Line search with alpha = 1.000 : res = 2.04782495e-03
+Newton iter.  1:          nonlinear residual = 2.04782495e-03	(M)
+	Line search with alpha = 1.000 : res = 1.28002843e-08
+Newton iter.  2:          nonlinear residual = 1.28002843e-08	(M)
+	Line search with alpha = 1.000 : res = 1.10529167e-13
+Stopping because residual is below prescribed tolerance (1.00e-10)
+
+Time step 4 - Advancing to t = 3.00e-02.
+Max absolute error analytical vs fd matrix is 2.40e-08
+Newton iter.  0:          nonlinear residual = 1.99055071e-01
+	Line search with alpha = 1.000 : res = 3.43066556e-04
+Newton iter.  1:          nonlinear residual = 3.43066556e-04	(M)
+	Line search with alpha = 1.000 : res = 6.76985560e-10
+Newton iter.  2:          nonlinear residual = 6.76985560e-10	(M)
+	Line search with alpha = 1.000 : res = 7.22511009e-15
+Stopping because residual is below prescribed tolerance (1.00e-10)

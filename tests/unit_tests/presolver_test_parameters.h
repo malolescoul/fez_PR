@@ -88,7 +88,9 @@ subsection Physical properties
  end
 end
 subsection Cahn Hilliard
- set mobility = 0.1
+ subsection mobility
+  set constant value = 0.1
+ end
  set surface tension = 1
  set interface thickness = 0.2
  set mff source term = chns form

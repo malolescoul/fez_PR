@@ -40,7 +40,6 @@ namespace Assembly
 
       auto &local_rhs = copy_data.local_rhs(sd.active_fe_index);
 
-      const double mobility              = sd.mobility;
       const double sigma_tilde_over_eps  = sd.sigma_tilde / sd.epsilon;
       const double sigma_tilde_times_eps = sd.sigma_tilde * sd.epsilon;
       const auto  &body_force            = sd.body_force;
@@ -51,6 +50,9 @@ namespace Assembly
 
       for (unsigned int q = 0; q < sd.n_q_points; ++q)
       {
+        const double mobility = sd.get_mobility(q);
+        const double diffusive_flux_factor =
+          sd.diffusive_flux_factor * mobility;
         const double JxW_moving = sd.JxW_moving[q];
         const double rho        = sd.density[q];
         const double eta        = sd.dynamic_viscosity[q];
@@ -87,7 +89,7 @@ namespace Assembly
 
         auto supg_velocity = u_conv;
         if constexpr (BaseType::with_stabilization)
-          supg_velocity += (sd.diffusive_flux_factor / rho) * grad_mu;
+          supg_velocity += (diffusive_flux_factor / rho) * grad_mu;
 
         const auto to_mult_by_phi_u_i =
           rho * (dudt + grad_u * u_conv - body_force) + diffusive_flux +
@@ -128,11 +130,10 @@ namespace Assembly
         if constexpr (BaseType::with_tracer_stabilization)
         {
           tau_tracer          = sd.tau_supg_tracer[q];
-          const double lap_mu = sd.potential_laplacians[q];
 
           // Compute strong residual of the tracer equation
           strong_residual_tracer =
-            dphidt + u_conv * grad_phi - mobility * lap_mu + source_phi;
+            dphidt + u_conv * grad_phi - sd.get_phase_diffusion(q) + source_phi;
         }
 
         for (unsigned int i = 0; i < sd.dofs_per_cell; ++i)
@@ -206,10 +207,8 @@ namespace Assembly
       auto &local_matrix = copy_data.local_matrix(sd.active_fe_index);
 
       const double bdf_c0                = sd.bdf_c0;
-      const double mobility              = sd.mobility;
       const double sigma_tilde_over_eps  = sd.sigma_tilde / sd.epsilon;
       const double sigma_tilde_times_eps = sd.sigma_tilde * sd.epsilon;
-      const double diffusive_flux_factor = sd.diffusive_flux_factor;
       const auto  &body_force            = sd.body_force;
 
       std::vector<Tensor<1, dim>> to_mult_by_phi_u_i_momentum(sd.dofs_per_cell);
@@ -235,6 +234,11 @@ namespace Assembly
         BaseType::with_stabilization && BaseType::with_moving_mesh ?
           sd.dofs_per_cell :
           0);
+
+      std::vector<double> mobility_variation(
+        sd.variable_mobility ? sd.dofs_per_cell : 0);
+      std::vector<Tensor<1, dim>> additional_momentum_variation(
+        sd.variable_mobility ? sd.dofs_per_cell : 0);
 
       const auto u_lower = this->ordering.u_lower;
 
@@ -276,6 +280,9 @@ namespace Assembly
 
       for (unsigned int q = 0; q < sd.n_q_points; ++q)
       {
+        const double mobility = sd.get_mobility(q);
+        const double diffusive_flux_factor =
+          sd.diffusive_flux_factor * mobility;
         const double JxW_moving = sd.JxW_moving[q];
         const double rho        = sd.density[q];
         const double eta        = sd.dynamic_viscosity[q];
@@ -383,11 +390,10 @@ namespace Assembly
         if constexpr (BaseType::with_tracer_stabilization)
         {
           tau_tracer          = sd.tau_supg_tracer[q];
-          const double lap_mu = sd.potential_laplacians[q];
 
           // Compute strong residual of the tracer equation
           strong_residual_tracer =
-            dphidt + u_conv * grad_phi - mobility * lap_mu + source_phi;
+            dphidt + u_conv * grad_phi - sd.get_phase_diffusion(q) + source_phi;
         }
 
         // Clipping phi makes the density constant outside [-1, 1].
@@ -400,6 +406,18 @@ namespace Assembly
           const auto &phi_u_j       = phi_u[j];
           const auto &grad_phi_u_j  = grad_phi_u[j];
           const auto &grad_phi_mu_j = grad_phi_mu[j];
+
+          double dM = 0.;
+          if (sd.variable_mobility)
+          {
+            const auto &evaluation = sd.mobility_evaluation[q];
+            dM = evaluation.derivative_wrt_tracer * phi_phi[j] +
+                 evaluation.derivative_wrt_velocity * phi_u_j +
+                 evaluation.derivative_wrt_tracer_gradient * grad_phi_phi[j];
+            mobility_variation[j] = dM;
+            additional_momentum_variation[j] =
+              sd.diffusive_flux_factor * dM * (grad_u * grad_mu);
+          }
 
           to_mult_by_phi_u_i_momentum[j] =
             rho *
@@ -419,9 +437,10 @@ namespace Assembly
           {
             // Tau stays frozen, but the direction depends on u, phi and mu.
             supg_velocity_variation[j] =
-              phi_u_j + diffusive_flux_factor *
-                          (inv_rho * grad_phi_mu_j +
-                           supg_dinvrho_dphi * phi_phi[j] * grad_mu);
+              phi_u_j + sd.diffusive_flux_factor * dM * inv_rho * grad_mu +
+              diffusive_flux_factor *
+                (inv_rho * grad_phi_mu_j +
+                 supg_dinvrho_dphi * phi_phi[j] * grad_mu);
           }
 
           if constexpr (BaseType::with_stabilization)
@@ -445,12 +464,32 @@ namespace Assembly
             strong_residual_momentum_variation[j] +=
               diffusive_flux_factor * grad_u * grad_phi_mu_j +
               phi * grad_phi_mu_j;
+            if (sd.variable_mobility)
+              strong_residual_momentum_variation[j] +=
+                additional_momentum_variation[j];
           }
 
           if constexpr (BaseType::with_tracer_stabilization)
+          {
             strong_residual_tracer_variation[j] =
               bdf_c0 * phi_phi[j] + phi_u_j * grad_phi +
               u_conv * grad_phi_phi[j] - mobility * laplacian_phi_mu[j];
+            if (sd.variable_mobility)
+            {
+              const auto dgrad_M =
+                sd.mobility_gradient_variation(q,
+                                               phi_phi[j],
+                                               phi_u_j,
+                                               grad_phi_u_j,
+                                               grad_phi_phi[j],
+                                               sd.gradient_dependent_mobility ?
+                                                 sd.hessian_shape_phi[q][j] :
+                                                 Tensor<2, dim>());
+              strong_residual_tracer_variation[j] -=
+                dM * sd.potential_laplacians[q] + dgrad_M * grad_mu +
+                sd.mobility_gradient[q] * grad_phi_mu_j;
+            }
+          }
 
           // Variations w.r.t. mesh position
           if constexpr (BaseType::with_moving_mesh)
@@ -461,6 +500,12 @@ namespace Assembly
             const double trG         = trace(G);
 
             const auto grad_u_x_G_j = grad_u * G;
+            const auto   dgrad_phi_x  = -(transpose_G * grad_phi);
+            const double dM_x =
+              sd.variable_mobility ?
+                sd.mobility_evaluation[q].derivative_wrt_tracer_gradient *
+                  dgrad_phi_x :
+                0.;
 
             p_x_tr_G_j[j] = p * trG;
 
@@ -487,7 +532,8 @@ namespace Assembly
               momentum_partial_residual * trG +
               rho * (grad_u * (-bdf_c0 * phi_x_j - G * u_conv)) -
               phi * transpose_G * grad_mu +
-              diffusive_flux_factor * grad_u * val * grad_mu;
+              diffusive_flux_factor * grad_u * val * grad_mu +
+              sd.diffusive_flux_factor * dM_x * (grad_u * grad_mu);
 
             to_mult_by_grad_phi_u_i_moving_mesh[j] =
               p * transpose_G +
@@ -505,7 +551,7 @@ namespace Assembly
               u_conv * (transpose_G * grad_phi);
 
             to_mult_by_grad_phi_phi_i_moving_mesh[j] =
-              mobility * (val * grad_mu);
+              mobility * (val * grad_mu) + dM_x * grad_mu;
 
             // Variation of potential
             to_mult_by_phi_mu_i_moving_mesh[j] = mu_partial_residual * trG;
@@ -538,7 +584,8 @@ namespace Assembly
               convective_velocity_x_variation[j] = du_conv_dx;
               if constexpr (BaseType::with_stabilization)
                 supg_velocity_x_variation[j] =
-                  du_conv_dx + diffusive_flux_factor * inv_rho * dgrad_mu_dx;
+                  du_conv_dx + diffusive_flux_factor * inv_rho * dgrad_mu_dx +
+                  sd.diffusive_flux_factor * dM_x * inv_rho * grad_mu;
 
               // Variation of the momentum stabilization term w.r.t. position
               if constexpr (BaseType::with_stabilization)
@@ -573,7 +620,8 @@ namespace Assembly
 
                 const auto ddiffusive_flux_dx =
                   diffusive_flux_factor *
-                  (dgrad_u_dx * grad_mu + grad_u * dgrad_mu_dx);
+                    (dgrad_u_dx * grad_mu + grad_u * dgrad_mu_dx) +
+                  sd.diffusive_flux_factor * dM_x * (grad_u * grad_mu);
                 const auto dcapillary_dx = phi * dgrad_mu_dx;
 
                 strong_residual_momentum_x_variation[j] =
@@ -602,6 +650,29 @@ namespace Assembly
                 strong_residual_tracer_x_variation[j] = du_conv_dx * grad_phi +
                                                         u_conv * dgrad_phi_dx -
                                                         mobility * dlap_mu_dx;
+                if (sd.variable_mobility)
+                {
+                  Tensor<2, dim> dhess_phi;
+                  if (sd.gradient_dependent_mobility)
+                  {
+                    const auto &H_phi = sd.tracer_hessians[q];
+                    dhess_phi         = -(transpose_G * H_phi + H_phi * G);
+                    for (unsigned int a = 0; a < dim; ++a)
+                      for (unsigned int b = 0; b < dim; ++b)
+                        for (unsigned int c = 0; c < dim; ++c)
+                          dhess_phi[a][b] -= grad_phi[c] * K[c][a][b];
+                  }
+                  const auto dgrad_M =
+                    sd.mobility_gradient_variation(q,
+                                                   0.,
+                                                   Tensor<1, dim>(),
+                                                   dgrad_u_dx,
+                                                   dgrad_phi_dx,
+                                                   dhess_phi);
+                  strong_residual_tracer_x_variation[j] -=
+                    dM_x * sd.potential_laplacians[q] + dgrad_M * grad_mu +
+                    sd.mobility_gradient[q] * dgrad_mu_dx;
+                }
 #if defined(WITH_GRADIENT_OF_SOURCE_TERMS)
                 strong_residual_tracer_x_variation[j] +=
                   (*grad_source_tracer) * phi_x_j;
@@ -689,6 +760,8 @@ namespace Assembly
                                  scalar_product(sym_grad_phi_u_i, sym_grad_u));
               else if (j_is_mu)
                 local_matrix_ij += phi_u_i * to_mult_by_phi_u_i_potential[j];
+              if (sd.variable_mobility && !j_is_x)
+                local_matrix_ij += phi_u_i * additional_momentum_variation[j];
 
               if constexpr (BaseType::with_stabilization)
               {
@@ -824,6 +897,10 @@ namespace Assembly
                 matrix_row[j] +=
                   mobility * (grad_phi_mu_j * grad_phi_phi_i) * JxW_moving;
               }
+
+              if (sd.variable_mobility && !j_is_x)
+                matrix_row[j] += mobility_variation[j] *
+                                 (grad_mu * grad_phi_phi_i) * JxW_moving;
 
               if constexpr (BaseType::with_tracer_stabilization)
               {

@@ -232,8 +232,6 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::MMSSourceTerm::
   const double eta0 = rho0 * physical_properties.fluids[0].kinematic_viscosity;
   const double eta1 = rho1 * physical_properties.fluids[1].kinematic_viscosity;
   const double eta  = CahnHilliard::linear_mixing(filtered_phi, eta0, eta1);
-  const double M    = cahn_hilliard_param.mobility;
-  const double diff_flux_factor = M * 0.5 * (rho1 - rho0);
   // const double drhodphi =
   //   CahnHilliard::linear_mixing_derivative(filtered_phi, rho0, rho1);
   const double detadphi =
@@ -260,7 +258,22 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::MMSSourceTerm::
   Tensor<1, dim> uDotGradu   = u * grad_u;
   Tensor<1, dim> grad_mu     = mms.exact_potential->gradient(p);
   Tensor<1, dim> grad_phi    = mms.exact_tracer->gradient(p);
-  Tensor<1, dim> J_flux      = diff_flux_factor * grad_mu;
+  const auto     evaluate_mobility =
+    CahnHilliard::get_mobility_evaluation_function(cahn_hilliard_param);
+  const auto mobility_data =
+    evaluate_mobility(cahn_hilliard_param,
+                      phi,
+                      u,
+                      grad_phi,
+                      CahnHilliard::get_adaptive_mobility_scaling(
+                        cahn_hilliard_param));
+  const double M = mobility_data.value;
+  // grad_u here is transposed relative to the assembly convention.
+  Tensor<1, dim> grad_M =
+    mobility_data.derivative_wrt_tracer * grad_phi +
+    grad_u * mobility_data.derivative_wrt_velocity +
+    mms.exact_tracer->hessian(p) * mobility_data.derivative_wrt_tracer_gradient;
+  Tensor<1, dim> J_flux      = (M * 0.5 * (rho1 - rho0)) * grad_mu;
   Tensor<1, dim> div_viscous = (eta * (lap_u + grad_div_u) +
                                 2. * detadphi * grad_phi * symmetrize(grad_u));
 
@@ -288,7 +301,7 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::MMSSourceTerm::
   // Tracer source term
   const double dphidt = mms.exact_tracer->time_derivative(p);
   const double lap_mu = mms.exact_potential->laplacian(p);
-  values[phi_lower]   = -(dphidt + u * grad_phi - M * lap_mu);
+  values[phi_lower] = -(dphidt + u * grad_phi - M * lap_mu - grad_M * grad_mu);
 
   // Potential source term
   const double mu      = mms.exact_potential->value(p);

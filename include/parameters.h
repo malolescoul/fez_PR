@@ -455,6 +455,16 @@ namespace Parameters
     {
     } mesh_velocity;
 
+    // Mixture density reconstructed from the material tracer.
+    struct Density : public PostProcessingField
+    {
+    } density;
+
+    // Mobility evaluated with the selected Cahn-Hilliard law.
+    struct Mobility : public PostProcessingField
+    {
+    } mobility;
+
     /**
      * All the PostProcessingField.
      */
@@ -795,10 +805,19 @@ namespace Parameters
   public:
     enum class MobilityModel
     {
-      constant
-    } mobility_model;
+      constant,
+      degenerate,
+      adaptive_normal_velocity,
+      adaptive_velocity
+    } mobility_model = MobilityModel::constant;
 
     double mobility;
+    double mobility_scaling_factor;
+    double mobility_regularization;
+    double velocity_regularization;
+    bool   mobility_tracer_limiter;
+    std::shared_ptr<ManufacturedSolutions::ParsedFunctionSDBase<dim>>
+           degenerate_mobility;
     double surface_tension;
     double epsilon_interface;
     bool   with_tracer_limiter;
