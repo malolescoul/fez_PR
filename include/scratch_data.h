@@ -101,7 +101,13 @@ namespace NavierStokesScratch
      * Not an update flag per se, but avoids defining an extra template
      * parameter.
      */
-    with_hp_capabilities = 1 << 4
+    with_hp_capabilities = 1 << 4,
+
+    /**
+     * Reinit data to assemble the enlarged (psi) tracer reconstruction, used
+     * by the enlarged CHNS solver. Implies cahn_hilliard.
+     */
+    enlarged = 1 << 5
   };
 
   // Forward declaration of base class below
@@ -144,10 +150,11 @@ namespace NavierStokesScratch
    * Scratch data for the quasi-incompressible Cahn_hilliard Navier-Stokes
    * solver on fixed mesh.
    */
-  template <int dim, bool with_moving_mesh = false>
+  template <int dim, bool with_moving_mesh = false, bool with_enlarged = false>
   using ScratchDataCHNS =
     ScratchData<dim,
-                (with_moving_mesh ? pseudo_solid : ns_only) | cahn_hilliard>;
+                (with_moving_mesh ? pseudo_solid : ns_only) | cahn_hilliard |
+                  (with_enlarged ? enlarged : ns_only)>;
 
   /**
    * This base class is a ScratchData common to all solvers. The pre-computation
@@ -632,7 +639,15 @@ namespace NavierStokesScratch
        */
       source_terms.vector_gradient_list(
         fe_values_moving.get_quadrature_points(), grad_source_term_full);
+#else
+      if constexpr (enable_enlarged)
+        if (param.mms_param.enable)
+          source_terms.vector_gradient_list(
+            fe_values_moving.get_quadrature_points(), grad_source_term_full);
 #endif
+      if constexpr (enable_enlarged)
+        for (unsigned int q = 0; q < n_q_points; ++q)
+          grad_source_psi[q] = grad_source_term_full[q][psi_lower];
 
       for (unsigned int q = 0; q < n_q_points; ++q)
       {
@@ -1037,6 +1052,13 @@ namespace NavierStokesScratch
                                                       potential_values);
       fe_values_moving[potential].get_function_gradients(current_solution,
                                                          potential_gradients);
+
+      if constexpr (enable_enlarged)
+      {
+        fe_values_moving[psi].get_function_values(current_solution, psi_values);
+        fe_values_moving[psi].get_function_gradients(current_solution,
+                                                     psi_gradients);
+      }
       if (enable_tracer_stabilization)
       {
         fe_values_moving[potential].get_function_laplacians(
@@ -1079,6 +1101,8 @@ namespace NavierStokesScratch
 
         source_term_tracer[q]    = source_term_full_moving[q](phi_lower);
         source_term_potential[q] = source_term_full_moving[q](mu_lower);
+        if constexpr (enable_enlarged)
+          source_term_psi[q] = source_term_full_moving[q](psi_lower);
 
         diffusive_flux[q] = diffusive_flux_factor *
                             present_velocity_gradients[q] *
@@ -1114,6 +1138,11 @@ namespace NavierStokesScratch
           grad_shape_phi[q][k] = fe_values_moving[tracer].gradient(k, q);
           shape_mu[q][k]       = fe_values_moving[potential].value(k, q);
           grad_shape_mu[q][k]  = fe_values_moving[potential].gradient(k, q);
+          if constexpr (enable_enlarged)
+          {
+            shape_psi[q][k]      = fe_values_moving[psi].value(k, q);
+            grad_shape_psi[q][k] = fe_values_moving[psi].gradient(k, q);
+          }
           if (enable_tracer_stabilization)
             laplacian_shape_mu[q][k] =
               trace(fe_values_moving[potential].hessian(k, q));
@@ -1275,6 +1304,7 @@ namespace NavierStokesScratch
     unsigned int l_lower;
     unsigned int phi_lower;
     unsigned int mu_lower;
+    unsigned int psi_lower;
     unsigned int t_lower;
 
   public:
@@ -1284,6 +1314,7 @@ namespace NavierStokesScratch
       (update_flags & lagrange_multiplier) != 0;
     static constexpr bool enable_cahn_hilliard =
       (update_flags & cahn_hilliard) != 0;
+    static constexpr bool enable_enlarged = (update_flags & enlarged) != 0;
     static constexpr bool enable_compressible =
       (update_flags & compressible) != 0;
     static constexpr bool has_hp_capabilities =
@@ -1531,6 +1562,7 @@ namespace NavierStokesScratch
      */
     FEValuesExtractors::Scalar tracer;
     FEValuesExtractors::Scalar potential;
+    FEValuesExtractors::Scalar psi;
 
     double         density0;
     double         density1;
@@ -1540,6 +1572,10 @@ namespace NavierStokesScratch
     double         epsilon;
     double         sigma_tilde;
     double         diffusive_flux_factor;
+    // Enlarged (psi) Helmholtz length scale squared (L^2, L = width factor *
+    // epsilon) and the raw mu-correction factor. Only set when enlarged.
+    double         psi_length_scale_sq;
+    double         psi_mu_correction_factor;
     Tensor<1, dim> body_force;
 
     CahnHilliard::TracerLimiterFunction tracer_limiter;
@@ -1575,6 +1611,15 @@ namespace NavierStokesScratch
 
     std::vector<double> source_term_tracer;
     std::vector<double> source_term_potential;
+
+    // Enlarged (psi) tracer on the current (moving) mesh, used by the enlarged
+    // solver. Reconstructed by the Helmholtz psi equation.
+    std::vector<double>                      psi_values;
+    std::vector<Tensor<1, dim>>              psi_gradients;
+    std::vector<std::vector<double>>         shape_psi;
+    std::vector<std::vector<Tensor<1, dim>>> grad_shape_psi;
+    std::vector<double>                      source_term_psi;
+    std::vector<Tensor<1, dim>>              grad_source_psi;
   };
 } // namespace NavierStokesScratch
 
