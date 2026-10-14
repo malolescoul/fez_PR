@@ -465,12 +465,18 @@ template <int dim>
 class ComponentOrderingElasticity : public ComponentOrdering
 {
 public:
-  ComponentOrderingElasticity()
+  ComponentOrderingElasticity(const bool with_enlarged_psi = false)
     : ComponentOrdering()
   {
     n_components = dim;
     x_lower      = 0;
     x_upper      = dim;
+    if (with_enlarged_psi)
+    {
+      psi_lower = dim;
+      psi_upper = dim + 1;
+      ++n_components;
+    }
   }
 };
 

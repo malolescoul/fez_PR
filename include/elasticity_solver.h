@@ -65,10 +65,13 @@ public:
   /**
    * Constructor. An optional reference triangulation is borrowed and must
    * outlive this solver. Its topology and reference vertices stay unchanged.
+   * With @p with_enlarged_psi, solve also the Helmholtz reconstruction of psi
+   * from the prescribed phase, to drive the enlarged mesh compression.
    */
   ElasticitySolver(const ParameterReader<dim> &param,
                    parallel::DistributedTriangulationBase<dim>
-                     *reference_triangulation = nullptr);
+                             *reference_triangulation = nullptr,
+                   const bool with_enlarged_psi       = false);
 
   virtual ~ElasticitySolver() = default;
 
@@ -153,7 +156,8 @@ public:
   bool try_load_presolved_mesh_cache();
 
   /**
-   * Write the presolved mesh position to the disk cache.
+   * Write the presolved mesh position and, in enlarged mode, psi to the disk
+   * cache.
    */
   void write_presolved_mesh_cache() const;
 
@@ -189,6 +193,7 @@ public:
 
 protected:
   ComponentOrdering ordering;
+  const bool        with_enlarged_psi;
 
   ParameterReader<dim> param;
 

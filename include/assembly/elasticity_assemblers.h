@@ -345,11 +345,10 @@ namespace Assembly
         : param(param)
         , ordering(ordering)
       {
-        if constexpr (!std::is_same_v<ScratchData, ScratchDataElasticity<dim>>)
-          if constexpr (ScratchData::enable_enlarged)
-            enlarged_normalization = enlarged_mesh_forcing_normalization(
-              param.cahn_hilliard.mff_regularization_gamma,
-              param.cahn_hilliard.mff_enlarged_lobe_position_exponent);
+        if (ordering.has_variable(SolverInfo::VariableType::phase_enlarged))
+          enlarged_normalization = enlarged_mesh_forcing_normalization(
+            param.cahn_hilliard.mff_regularization_gamma,
+            param.cahn_hilliard.mff_enlarged_lobe_position_exponent);
       }
 
       /**
@@ -369,6 +368,30 @@ namespace Assembly
 
     private:
       double enlarged_normalization = 1.;
+    };
+    /**
+     * Reconstruct psi on the current mesh from the analytic initial phase.
+     * Both psi and the mesh position are unknowns of the presolver.
+     */
+    template <int dim, typename ScratchData, typename CopyData>
+    class PresolverPsiAssembler : public AssemblerBase<ScratchData, CopyData>
+    {
+    public:
+      PresolverPsiAssembler(const ParameterReader<dim> &param,
+                            const ComponentOrdering    &ordering)
+        : param(param)
+        , ordering(ordering)
+      {}
+
+      virtual void assemble_matrix(const ScratchData &scratch_data,
+                                   CopyData          &copy_data) const override;
+
+      virtual void assemble_rhs(const ScratchData &scratch_data,
+                                CopyData          &copy_data) const override;
+
+    public:
+      const ParameterReader<dim> &param;
+      const ComponentOrdering    &ordering;
     };
   } // namespace Elasticity
 } // namespace Assembly
@@ -410,6 +433,12 @@ namespace Assembly
         default:
           DEAL_II_ASSERT_UNREACHABLE();
       }
+
+      if constexpr (std::is_same_v<ScratchData, ScratchDataElasticity<dim>>)
+        if (ordering.has_variable(SolverInfo::VariableType::phase_enlarged))
+          assemblers.emplace_back(
+            std::make_unique<PresolverPsiAssembler<dim, ScratchData, CopyData>>(
+              param, ordering));
 
       // Custom (user-defined) source term on the current mesh.
       if (param.elasticity.enable_source_term_on_current_mesh)
