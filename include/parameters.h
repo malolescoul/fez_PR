@@ -507,6 +507,7 @@ namespace Parameters
           return mesh_position_degree;
         case V::temperature:
           return temperature_degree;
+        case V::phase_enlarged:
         case V::phase_tracer:
           return tracer_degree;
         case V::phase_potential:
@@ -821,6 +822,23 @@ namespace Parameters
     double mff_transport_factor;
     // Regularization gamma inside the saturated compression factor.
     double mff_regularization_gamma;
+
+    // Enlarged (psi) solver. Psi is a widened tracer reconstructed by a
+    // Helmholtz equation psi - L^2 lap(psi) = phi (+ corrections), used as the
+    // mesh-forcing marker. The widening length is L =
+    // psi_interface_width_factor
+    // * epsilon_interface.
+    double psi_interface_width_factor;
+    // Optional opt-in mu-correction in the psi equation, localized near the
+    // interface (0 disables it).
+    double psi_mu_correction_factor;
+    // Compression factor multiplying the psi-based forcing factor(psi)*grad psi
+    // (enlarged solver). The phi-based physics compression is added on top when
+    // mff_physics_compression_factor != 0.
+    double mff_enlarged_compression_factor;
+    // Positive exponent of the smooth power map shaping the enlarged
+    // compression lobes; q = 1 leaves the factor unchanged.
+    double mff_enlarged_lobe_position_exponent;
 
     // If true, an elasticity presolver is run first to pre-position the mesh,
     // and its mesh position is injected as the initial mesh of the CHNS solver.
