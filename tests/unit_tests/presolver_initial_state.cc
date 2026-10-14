@@ -7,12 +7,12 @@
 
 // Inspect the initial state through the real CHNS postprocessing hook, then
 // let the solver advance through its BDF startup and subsequent time steps.
-template <int dim>
-class InitialStateProblem : public CHNSSolver<dim, true>
+template <int dim, bool enlarged = false>
+class InitialStateProblem : public CHNSSolver<dim, true, enlarged>
 {
 public:
   InitialStateProblem(const ParameterReader<dim> &param)
-    : CHNSSolver<dim, true>(param)
+    : CHNSSolver<dim, true, enlarged>(param)
   {
     this->pcout.set_condition(false);
   }
@@ -34,6 +34,8 @@ public:
       return;
     }
     ++checks;
+    if constexpr (enlarged)
+      check_reconstruction();
     const auto                      &fe = this->get_fe_system();
     const Quadrature<dim>            nodes(fe.get_unit_support_points());
     FEValues<dim>                    values(*this->fixed_mapping,
@@ -83,7 +85,10 @@ public:
     for (const auto i : this->locally_owned_dofs)
       if (this->ordering->is_position(
             this->dofs_to_component[this->locally_relevant_dofs
-                                      .index_within_set(i)]))
+                                      .index_within_set(i)]) ||
+          (enlarged && this->ordering->is_psi(
+                         this->dofs_to_component[this->locally_relevant_dofs
+                                                   .index_within_set(i)])))
         for (const auto &previous : *this->previous_solutions)
           error =
             std::max(error,
@@ -91,7 +96,10 @@ public:
     for (const auto i : this->locally_owned_dofs)
       if (this->ordering->is_position(
             this->dofs_to_component[this->locally_relevant_dofs
-                                      .index_within_set(i)]))
+                                      .index_within_set(i)]) ||
+          (enlarged && this->ordering->is_psi(
+                         this->dofs_to_component[this->locally_relevant_dofs
+                                                   .index_within_set(i)])))
         initial_positions[i] = (*this->present_solution)[i];
     error        = Utilities::MPI::max(error, this->mpi_communicator);
     displacement = Utilities::MPI::max(displacement, this->mpi_communicator);
@@ -105,16 +113,77 @@ public:
               << std::endl;
   }
 
+  void check_reconstruction()
+  {
+    const auto                          &fe = this->get_fe_system();
+    FEValues<dim>                        values(*this->moving_mapping,
+                         fe,
+                         *this->quadrature,
+                         update_values | update_gradients |
+                           update_quadrature_points | update_JxW_values);
+    const FEValuesExtractors::Scalar     psi(this->ordering->psi_lower);
+    std::vector<double>                  marker(values.n_quadrature_points);
+    std::vector<Tensor<1, dim>>          gradient(values.n_quadrature_points);
+    std::vector<types::global_dof_index> indices(fe.n_dofs_per_cell());
+    LA::ParVectorType                    residual(this->locally_owned_dofs,
+                               this->mpi_communicator);
+    const auto                          &ch = this->param.cahn_hilliard;
+    const double L2 = Utilities::fixed_power<2>(ch.psi_interface_width_factor *
+                                                ch.epsilon_interface);
+    double       magnitude = 0.;
+    for (const auto &cell : this->dof_handler->active_cell_iterators())
+      if (cell->is_locally_owned())
+      {
+        values.reinit(cell);
+        cell->get_dof_indices(indices);
+        values[psi].get_function_values(*this->present_solution, marker);
+        values[psi].get_function_gradients(*this->present_solution, gradient);
+        for (unsigned int q = 0; q < values.n_quadrature_points; ++q)
+        {
+          magnitude = std::max(magnitude, std::abs(marker[q]));
+          const double phase =
+            this->param.initial_conditions.initial_chns_tracer_callback->value(
+              values.quadrature_point(q));
+          for (unsigned int i = 0; i < indices.size(); ++i)
+            if (this->ordering->is_psi(fe.system_to_component_index(i).first))
+              residual[indices[i]] +=
+                (values[psi].value(i, q) * (marker[q] - phase) +
+                 L2 * values[psi].gradient(i, q) * gradient[q]) *
+                values.JxW(q);
+        }
+      }
+    residual.compress(VectorOperation::add);
+    AssertThrow(
+      residual.linfty_norm() < 2e-9,
+      ExcMessage(
+        "Injected psi does not satisfy its presolved Helmholtz equation"));
+    AssertThrow(Utilities::MPI::max(magnitude, this->mpi_communicator) > 1e-3,
+                ExcMessage("Injected psi must be nonzero"));
+    if (this->mpi_rank == 0)
+      deallog << dim
+              << "D injected psi satisfies Helmholtz on the compressed mesh"
+              << std::endl;
+  }
+
   unsigned int                              checks          = 0;
   bool                                      checked_startup = false;
   std::map<types::global_dof_index, double> initial_positions;
 };
 
-template <int dim>
+template <int dim, bool enlarged = false>
 void check_initial_state()
 {
   auto                     param = presolver_test_parameters<dim>();
-  InitialStateProblem<dim> problem(param);
+  if constexpr (enlarged)
+  {
+    param.cahn_hilliard.mff_enlarged_compression_factor     = 0.5;
+    param.cahn_hilliard.psi_interface_width_factor          = 2.;
+    param.cahn_hilliard.mff_enlarged_lobe_position_exponent = 0.7;
+    param.finite_elements.tracer_degree                     = 2;
+    for (auto &[id, bc] : param.pseudosolid_bc)
+      bc.type = BoundaryConditions::Type::no_flux;
+  }
+  InitialStateProblem<dim, enlarged> problem(param);
   problem.run();
   AssertThrow(problem.checks == 1 && problem.checked_startup,
               ExcInternalError());
@@ -129,4 +198,6 @@ int main(int argc, char **argv)
     initlog();
   check_initial_state<2>();
   check_initial_state<3>();
+  check_initial_state<2, true>();
+  check_initial_state<3, true>();
 }

@@ -15,6 +15,8 @@ using namespace dealii;
 
 /**
  * Small scratch data for the elasticity equation on fixed mesh.
+ * In enlarged mode, also evaluate psi and its Helmholtz equation on the
+ * current mesh defined by the position field.
  */
 template <int dim>
 class ScratchDataElasticity
@@ -27,16 +29,19 @@ public:
                         const Mapping<dim>         &mapping,
                         const Quadrature<dim>      &cell_quadrature,
                         const Quadrature<dim - 1>  &face_quadrature,
-                        const ParameterReader<dim> &param)
+                        const ParameterReader<dim> &param,
+                        const bool                  with_enlarged_psi = false)
     : param(param)
     , fe_values(mapping,
                 fe,
                 cell_quadrature,
                 update_values | update_gradients | update_quadrature_points |
                   update_JxW_values)
+    , with_enlarged_psi(with_enlarged_psi)
     , evaluate_chns_forcing(
+        with_enlarged_psi ||
         param.cahn_hilliard.mff_source_term ==
-        Parameters::CahnHilliard<dim>::MeshForcingSourceTerm::chns_form)
+          Parameters::CahnHilliard<dim>::MeshForcingSourceTerm::chns_form)
     , n_q_points(cell_quadrature.size())
     , n_faces(fe.reference_cell().n_faces())
     , n_faces_q_points(face_quadrature.size())
@@ -55,6 +60,7 @@ public:
                 other.fe_values.get_fe(),
                 other.fe_values.get_quadrature(),
                 other.fe_values.get_update_flags())
+    , with_enlarged_psi(other.with_enlarged_psi)
     , evaluate_chns_forcing(other.evaluate_chns_forcing)
     , n_q_points(other.n_q_points)
     , n_faces(other.n_faces)
@@ -108,6 +114,17 @@ private:
     grad_source_term_position_current_mesh.resize(n_q_points);
     source_term_position.resize(n_q_points);
 
+    if (with_enlarged_psi)
+    {
+      psi_values.resize(n_q_points);
+      psi_gradients.resize(n_q_points);
+      JxW_moving.resize(n_q_points);
+      shape_psi.resize(n_q_points, std::vector<double>(dofs_per_cell));
+      grad_shape_psi.resize(n_q_points,
+                            std::vector<Tensor<1, dim>>(dofs_per_cell));
+      grad_phi_x_moving.resize(n_q_points,
+                               std::vector<Tensor<2, dim>>(dofs_per_cell));
+    }
     if (evaluate_chns_forcing)
     {
       chns_tracer_values.resize(n_q_points);
@@ -167,6 +184,12 @@ public:
       }
     }
 
+    if (with_enlarged_psi)
+    {
+      fe_values[psi].get_function_values(current_solution, psi_values);
+      fe_values[psi].get_function_gradients(current_solution, psi_gradients);
+    }
+
     for (unsigned int q = 0; q < n_q_points; ++q)
     {
       JxW_fixed[q] = fe_values.JxW(q);
@@ -211,6 +234,15 @@ public:
       present_position_inverse_gradients_T[q] =
         transpose(present_position_inverse_gradients[q]);
 
+      if (with_enlarged_psi)
+      {
+        // Pull back the Helmholtz equation from the current mesh: scalar FE
+        // values are unchanged, gradients transform by F^{-T}, and dx=det(F)dX.
+        JxW_moving[q] = present_position_J[q] * JxW_fixed[q];
+        psi_gradients[q] =
+          present_position_inverse_gradients_T[q] * psi_gradients[q];
+      }
+
       if constexpr (running_in_debug_mode())
       {
         // Throw if
@@ -223,6 +255,14 @@ public:
         grad_phi_x[q][k]     = fe_values[position].gradient(k, q);
         sym_grad_phi_x[q][k] = fe_values[position].symmetric_gradient(k, q);
         div_phi_x[q][k]      = fe_values[position].divergence(k, q);
+        if (with_enlarged_psi)
+        {
+          shape_psi[q][k]      = fe_values[psi].value(k, q);
+          grad_shape_psi[q][k] = present_position_inverse_gradients_T[q] *
+                                 fe_values[psi].gradient(k, q);
+          grad_phi_x_moving[q][k] =
+            grad_phi_x[q][k] * present_position_inverse_gradients[q];
+        }
       }
     }
   }
@@ -232,6 +272,8 @@ private:
   // Parameters::PhysicalProperties<dim> physical_properties;
 
   FEValues<dim> fe_values;
+
+  const bool with_enlarged_psi;
 
   // Whether to evaluate the Cahn-Hilliard phase (and its derivatives) on the
   // current mesh, for the moving-mesh forcing of the elasticity presolver.
@@ -244,6 +286,14 @@ public:
   const unsigned int n_faces;
   const unsigned int n_faces_q_points;
   const unsigned int dofs_per_cell;
+
+  // Only allocated for the coupled position/psi presolver.
+  FEValuesExtractors::Scalar               psi{dim};
+  std::vector<double>                      psi_values, JxW_moving;
+  std::vector<Tensor<1, dim>>              psi_gradients;
+  std::vector<std::vector<double>>         shape_psi;
+  std::vector<std::vector<Tensor<1, dim>>> grad_shape_psi;
+  std::vector<std::vector<Tensor<2, dim>>> grad_phi_x_moving;
 
   std::vector<unsigned int> components;
 

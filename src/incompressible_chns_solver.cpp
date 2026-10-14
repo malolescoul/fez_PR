@@ -46,11 +46,15 @@ bool CHNSSolver<dim, with_moving_mesh, with_enlarged>::
       // when the main simulation allows adaptive time-step rejection.
       presolver_param.time_integration.scheme =
         Parameters::TimeIntegration::Scheme::stationary;
-      ElasticitySolver<dim> presolver(presolver_param, this->triangulation);
+      ElasticitySolver<dim> presolver(presolver_param,
+                                      this->triangulation,
+                                      with_enlarged);
       presolver.run();
       std::map<unsigned int, unsigned int> components;
       for (unsigned int d = 0; d < dim; ++d)
         components[d] = this->ordering->x_lower + d;
+      if constexpr (with_enlarged)
+        components[dim] = this->ordering->psi_lower;
       extract_subsolution<dim>(presolver.get_dof_handler(),
                                *this->dof_handler,
                                presolver.get_present_solution(),
@@ -60,11 +64,15 @@ bool CHNSSolver<dim, with_moving_mesh, with_enlarged>::
     else
     {
       // Repeating the initial condition for BDF startup keeps its mesh
-      // position.
+      // position and the reconstructed marker.
       for (const auto i : this->locally_owned_dofs)
         if (this->ordering->is_position(
               this->dofs_to_component[this->locally_relevant_dofs
-                                        .index_within_set(i)]))
+                                        .index_within_set(i)]) ||
+            (with_enlarged &&
+             this->ordering->is_psi(
+               this->dofs_to_component[this->locally_relevant_dofs
+                                         .index_within_set(i)])))
           this->newton_update[i] = (*this->present_solution)[i];
     }
     this->newton_update.compress(VectorOperation::insert);
@@ -77,11 +85,6 @@ CHNSSolver<dim, with_moving_mesh, with_enlarged>::CHNSSolver(
   const ParameterReader<dim> &param)
   : NavierStokesSolver<dim, with_moving_mesh>(param)
 {
-  if constexpr (with_enlarged)
-    AssertThrow(!param.cahn_hilliard.use_presolver,
-                ExcMessage(
-                  "The enlarged CHNS-ALE presolver is not available yet."));
-
   if constexpr (with_enlarged)
   {
     // Enlarged ALE: same layout as the moving-mesh CHNS, with the extra psi
@@ -501,7 +504,8 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::
                            tracer_mask);
 
   if constexpr (with_enlarged)
-    if (this->param.initial_conditions.set_to_mms)
+    if (this->param.initial_conditions.set_to_mms &&
+        !this->param.cahn_hilliard.use_presolver)
       VectorTools::interpolate(*this->moving_mapping,
                                *this->dof_handler,
                                *this->exact_solution,

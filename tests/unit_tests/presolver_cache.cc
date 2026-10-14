@@ -10,8 +10,8 @@
 class CachedElasticity : public ElasticitySolver<2>
 {
 public:
-  CachedElasticity(const ParameterReader<2> &p)
-    : ElasticitySolver<2>(p)
+  CachedElasticity(const ParameterReader<2> &p, const bool enlarged = false)
+    : ElasticitySolver<2>(p, nullptr, enlarged)
   {
     pcout.set_condition(false);
   }
@@ -165,6 +165,64 @@ void check_cache()
     std::filesystem::remove("presolver-test.cache");
   }
 }
+void check_enlarged_cache()
+{
+  restore_cache("invalid");
+  auto p                                              = parameters();
+  p.cahn_hilliard.mff_enlarged_compression_factor     = 0.5;
+  p.cahn_hilliard.psi_interface_width_factor          = 2.;
+  p.cahn_hilliard.mff_enlarged_lobe_position_exponent = 0.7;
+  CachedElasticity fresh(p, true);
+  fresh.run();
+  const auto       original = cache_contents();
+  CachedElasticity loaded(p, true);
+  loaded.run();
+  AssertThrow(fresh.linear_solves > 0 && loaded.linear_solves == 0,
+              ExcInternalError());
+  double error = 0.;
+  for (const auto i : fresh.get_dof_handler().locally_owned_dofs())
+    error = std::max(error,
+                     std::abs(fresh.get_present_solution()[i] -
+                              loaded.get_present_solution()[i]));
+  AssertThrow(Utilities::MPI::max(error, MPI_COMM_WORLD) < 1e-12,
+              ExcMessage(
+                "The enlarged cache must preserve both position and psi"));
+  for (const std::string change :
+       {"width", "compression", "lobes", "degree", "standard"})
+  {
+    restore_cache(original);
+    auto changed = p;
+    if (change == "width")
+      changed.cahn_hilliard.psi_interface_width_factor = 3.;
+    if (change == "compression")
+      changed.cahn_hilliard.mff_enlarged_compression_factor = 0.7;
+    if (change == "lobes")
+      changed.cahn_hilliard.mff_enlarged_lobe_position_exponent = 1.2;
+    if (change == "degree")
+      changed.finite_elements.tracer_degree = 2;
+    CachedElasticity solver(changed, change != "standard");
+    solver.run();
+    AssertThrow(solver.linear_solves > 0,
+                ExcMessage("Stale enlarged cache was reused after changing " +
+                           change));
+  }
+  restore_cache(original);
+  p.cahn_hilliard.psi_mu_correction_factor = 0.8;
+  p.cahn_hilliard.mff_transport_factor     = 9.;
+  CachedElasticity inactive(p, true);
+  inactive.run();
+  AssertThrow(
+    inactive.linear_solves == 0,
+    ExcMessage(
+      "Inactive transport/mu correction must not invalidate the cache"));
+  if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
+  {
+    deallog << "Enlarged cache preserves position and psi and checks active "
+               "parameters"
+            << std::endl;
+    std::filesystem::remove("presolver-test.cache");
+  }
+}
 int main(int argc, char **argv)
 {
   Utilities::MPI::MPI_InitFinalize mpi(argc, argv, 1);
@@ -174,6 +232,7 @@ int main(int argc, char **argv)
   try
   {
     check_cache();
+    check_enlarged_cache();
   }
   catch (const std::exception &e)
   {
