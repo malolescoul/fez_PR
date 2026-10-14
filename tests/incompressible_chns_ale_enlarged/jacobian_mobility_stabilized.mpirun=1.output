@@ -1,0 +1,42 @@
+Number of MPI processes: 1
+Mesh info:
+ dimension: 2
+ no. of cells: 12
+ boundary indicators: 0(3 faces) 1(3 faces) 2(2 faces) 3(2 faces)
+ID 0 -> x_min
+ID 1 -> x_max
+ID 2 -> y_min
+ID 3 -> y_max
+Number of degrees of freedom: 211
+
+Time step 1 - Advancing to t = 0.01.
+Max absolute error analytical vs fd matrix is 7.26132e-07
+Newton iter.  0:          nonlinear residual = 2.71265528e+01
+	Line search with alpha = 1.000 : res = 1.87861874e+00
+Newton iter.  1:          nonlinear residual = 1.87861874e+00	(M)
+	Line search with alpha = 1.000 : res = 2.01543097e-01
+Newton iter.  2:          nonlinear residual = 2.01543097e-01	(M)
+	Line search with alpha = 1.000 : res = 9.70560393e-03
+Newton iter.  3:          nonlinear residual = 9.70560393e-03	(M)
+	Line search with alpha = 1.000 : res = 3.51043823e-05
+Newton iter.  4:          nonlinear residual = 3.51043823e-05	(M)
+	Line search with alpha = 1.000 : res = 1.16062035e-07
+Newton iter.  5:          nonlinear residual = 1.16062035e-07	(M)
+	Line search with alpha = 1.000 : res = 1.93185541e-10
+Newton iter.  6:          nonlinear residual = 1.93185541e-10	(M)
+	Line search with alpha = 1.000 : res = 4.54044766e-13
+Stopping because residual is below prescribed tolerance (1.00e-10)
+
+Time step 2 - Advancing to t = 2.00e-02.
+Max absolute error analytical vs fd matrix is 7.10e-07
+Newton iter.  0:          nonlinear residual = 5.34053414e+00
+	Line search with alpha = 1.000 : res = 4.47956942e-01
+Newton iter.  1:          nonlinear residual = 4.47956942e-01	(M)
+	Line search with alpha = 1.000 : res = 1.11853072e-02
+Newton iter.  2:          nonlinear residual = 1.11853072e-02	(M)
+	Line search with alpha = 1.000 : res = 6.65557949e-05
+Newton iter.  3:          nonlinear residual = 6.65557949e-05	(M)
+	Line search with alpha = 1.000 : res = 2.57706964e-08
+Newton iter.  4:          nonlinear residual = 2.57706964e-08	(M)
+	Line search with alpha = 1.000 : res = 5.69432838e-11
+Stopping because residual is below prescribed tolerance (1.00e-10)

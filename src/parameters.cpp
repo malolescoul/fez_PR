@@ -504,11 +504,13 @@ namespace Parameters
       "Comma-separated boundary ids on which this postprocessing is applied");
   }
 
-  void declare_postprocessing_field(ParameterHandler &prm)
+  void declare_postprocessing_field(
+    ParameterHandler  &prm,
+    const std::string &default_method = "discontinuous")
   {
     declare_postprocessing_base(prm);
     prm.declare_entry("computation method",
-                      "discontinuous",
+                      default_method,
                       Patterns::Selection(
                         "discontinuous|l2 projection|weighted average"),
                       "Computation method");
@@ -597,6 +599,16 @@ namespace Parameters
       prm.enter_subsection("mesh velocity");
       {
         declare_postprocessing_field(prm);
+      }
+      prm.leave_subsection();
+      prm.enter_subsection("density");
+      {
+        declare_postprocessing_field(prm, "weighted average");
+      }
+      prm.leave_subsection();
+      prm.enter_subsection("mobility");
+      {
+        declare_postprocessing_field(prm, "weighted average");
       }
       prm.leave_subsection();
     }
@@ -758,6 +770,22 @@ namespace Parameters
         read_postprocessing_field(prm,
                                   mesh_velocity,
                                   FieldPP::mesh_velocity,
+                                  field_postprocessors);
+      }
+      prm.leave_subsection();
+      prm.enter_subsection("density");
+      {
+        read_postprocessing_field(prm,
+                                  density,
+                                  FieldPP::density,
+                                  field_postprocessors);
+      }
+      prm.leave_subsection();
+      prm.enter_subsection("mobility");
+      {
+        read_postprocessing_field(prm,
+                                  mobility,
+                                  FieldPP::mobility,
                                   field_postprocessors);
       }
       prm.leave_subsection();
@@ -1523,14 +1551,45 @@ namespace Parameters
   {
     prm.enter_subsection("Cahn Hilliard");
     {
-      prm.declare_entry("mobility model",
-                        "constant",
-                        Patterns::Selection("constant"),
-                        "Model for the mobility tensor");
-      prm.declare_entry("mobility",
-                        "1.",
-                        Patterns::Double(),
-                        "Mobility value if constant");
+      prm.enter_subsection("mobility");
+      {
+        prm.declare_entry(
+          "model",
+          "constant",
+          Patterns::Selection(
+            "constant|degenerate|Adaptive normal velocity|Adaptive velocity"),
+          "Scalar mobility law. Adaptive normal velocity uses u.grad(phi), "
+          "including the magnitude of the phase gradient; Adaptive velocity "
+          "uses |u|.");
+        prm.declare_entry("constant value",
+                          "1",
+                          Patterns::Double(0.),
+                          "Mobility for the constant model.");
+        prm.declare_entry("scaling factor",
+                          "1",
+                          Patterns::Double(0.),
+                          "Positive dimensionless multiplier of the "
+                          "velocity-dependent contribution.");
+        prm.declare_entry("mobility regularization",
+                          "1e-12",
+                          Patterns::Double(0.),
+                          "Positive regularization in mobility units for "
+                          "Adaptive normal velocity.");
+        prm.declare_entry(
+          "velocity regularization",
+          "1e-12",
+          Patterns::Double(0.),
+          "Positive regularization in velocity units for Adaptive velocity.");
+        prm.declare_entry(
+          "enable tracer limiter",
+          "false",
+          Patterns::Bool(),
+          "Clamp phi to [-1,1] before evaluating the degenerate mobility.");
+        degenerate_mobility =
+          std::make_shared<ManufacturedSolutions::ParsedFunctionSDBase<dim>>(1);
+        degenerate_mobility->declare_parameters(prm, 1, "(1-x*x)*(1-x*x)");
+      }
+      prm.leave_subsection();
       prm.declare_entry("surface tension",
                         "1.",
                         Patterns::Double(),
@@ -1610,10 +1669,41 @@ namespace Parameters
   {
     prm.enter_subsection("Cahn Hilliard");
     {
-      const std::string parsed_mobility_model = prm.get("mobility model");
-      if (parsed_mobility_model == "linear")
-        mobility_model = MobilityModel::constant;
-      mobility            = prm.get_double("mobility");
+      prm.enter_subsection("mobility");
+      {
+        const auto model = prm.get("model");
+        if (model == "constant")
+          mobility_model = MobilityModel::constant;
+        else if (model == "degenerate")
+          mobility_model = MobilityModel::degenerate;
+        else if (model == "Adaptive normal velocity")
+          mobility_model = MobilityModel::adaptive_normal_velocity;
+        else
+          mobility_model = MobilityModel::adaptive_velocity;
+        mobility                = prm.get_double("constant value");
+        mobility_scaling_factor = prm.get_double("scaling factor");
+        mobility_regularization = prm.get_double("mobility regularization");
+        velocity_regularization = prm.get_double("velocity regularization");
+        mobility_tracer_limiter = prm.get_bool("enable tracer limiter");
+        if (mobility_model == MobilityModel::degenerate)
+          degenerate_mobility->parse_parameters(prm);
+        if (mobility_model == MobilityModel::adaptive_normal_velocity ||
+            mobility_model == MobilityModel::adaptive_velocity)
+        {
+          AssertThrow(
+            mobility_scaling_factor > 0.,
+            ExcMessage(
+              "Adaptive mobility requires a positive scaling factor."));
+          const double delta =
+            mobility_model == MobilityModel::adaptive_normal_velocity ?
+              mobility_regularization :
+              velocity_regularization;
+          AssertThrow(delta > 0.,
+                      ExcMessage(
+                        "Adaptive mobility requires positive regularization."));
+        }
+      }
+      prm.leave_subsection();
       surface_tension     = prm.get_double("surface tension");
       epsilon_interface   = prm.get_double("interface thickness");
       with_tracer_limiter = prm.get_bool("enable tracer limiter");

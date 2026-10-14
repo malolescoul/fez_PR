@@ -1026,6 +1026,53 @@ namespace NavierStokesScratch
       }
     }
 
+  public:
+    double get_mobility(const unsigned int q) const
+    {
+      return variable_mobility ? mobility_evaluation[q].value : mobility;
+    }
+
+    double get_phase_diffusion(const unsigned int q) const
+    {
+      return get_mobility(q) * potential_laplacians[q] +
+             (variable_mobility ?
+                mobility_gradient[q] * potential_gradients[q] :
+                0.);
+    }
+
+    // Differentiate grad(M) = M_phi grad(phi) + grad(u)^T M_u + H_phi
+    // M_gradphi.
+    Tensor<1, dim>
+    mobility_gradient_variation(const unsigned int    q,
+                                const double          dphi,
+                                const Tensor<1, dim> &du,
+                                const Tensor<2, dim> &dgrad_u,
+                                const Tensor<1, dim> &dgrad_phi,
+                                const Tensor<2, dim> &dhess_phi) const
+    {
+      if (!variable_mobility)
+        return {};
+      const auto &evaluation = mobility_evaluation[q];
+      auto        result =
+        evaluation.derivative_wrt_tracer * dgrad_phi +
+        evaluation.second_derivative_wrt_tracer * dphi * tracer_gradients[q];
+      if (adaptive_mobility)
+      {
+        const auto &hessians = mobility_hessians[q];
+        result += transpose(dgrad_u) * evaluation.derivative_wrt_velocity +
+                  transpose(present_velocity_gradients[q]) *
+                    (hessians.velocity_velocity * du +
+                     hessians.velocity_gradient * dgrad_phi);
+        if (gradient_dependent_mobility)
+          result +=
+            dhess_phi * evaluation.derivative_wrt_tracer_gradient +
+            tracer_hessians[q] * (transpose(hessians.velocity_gradient) * du +
+                                  hessians.gradient_gradient * dgrad_phi);
+      }
+      return result;
+    }
+
+  private:
     template <typename VectorType>
     void
     reinit_cahn_hilliard_cell(const FEValues<dim>           &fe_values_fixed,
@@ -1068,6 +1115,9 @@ namespace NavierStokesScratch
           fe_values_moving[potential].get_function_hessians(current_solution,
                                                             potential_hessians);
       }
+      if (gradient_dependent_mobility && enable_tracer_stabilization)
+        fe_values_moving[tracer].get_function_hessians(current_solution,
+                                                       tracer_hessians);
       // Previous solutions
       for (unsigned int i = 0; i < previous_solutions.size(); ++i)
         fe_values_moving[tracer].get_function_values(previous_solutions[i],
@@ -1104,7 +1154,39 @@ namespace NavierStokesScratch
         if constexpr (enable_enlarged)
           source_term_psi[q] = source_term_full_moving[q](psi_lower);
 
-        diffusive_flux[q] = diffusive_flux_factor *
+        if (variable_mobility)
+        {
+          // The mobility law uses physical velocity, including on moving
+          // meshes.
+          mobility_evaluation[q] = mobility_function(param.cahn_hilliard,
+                                                     tracer_values[q],
+                                                     present_velocity_values[q],
+                                                     tracer_gradients[q],
+                                                     mobility_scaling);
+          if (enable_tracer_stabilization)
+          {
+            const auto &evaluation = mobility_evaluation[q];
+            mobility_gradient[q] =
+              evaluation.derivative_wrt_tracer * tracer_gradients[q];
+            if (adaptive_mobility)
+            {
+              mobility_hessians[q] =
+                CahnHilliard::evaluate_adaptive_mobility_hessians(
+                  param.cahn_hilliard,
+                  present_velocity_values[q],
+                  tracer_gradients[q],
+                  mobility_scaling);
+              mobility_gradient[q] += transpose(present_velocity_gradients[q]) *
+                                      evaluation.derivative_wrt_velocity;
+              if (gradient_dependent_mobility)
+                mobility_gradient[q] +=
+                  tracer_hessians[q] *
+                  evaluation.derivative_wrt_tracer_gradient;
+            }
+          }
+        }
+        const double current_mobility = get_mobility(q);
+        diffusive_flux[q] = diffusive_flux_factor * current_mobility *
                             present_velocity_gradients[q] *
                             potential_gradients[q];
 
@@ -1136,6 +1218,8 @@ namespace NavierStokesScratch
           // Shape functions on moving mesh
           shape_phi[q][k]      = fe_values_moving[tracer].value(k, q);
           grad_shape_phi[q][k] = fe_values_moving[tracer].gradient(k, q);
+          if (gradient_dependent_mobility && enable_tracer_stabilization)
+            hessian_shape_phi[q][k] = fe_values_moving[tracer].hessian(k, q);
           shape_mu[q][k]       = fe_values_moving[potential].value(k, q);
           grad_shape_mu[q][k]  = fe_values_moving[potential].gradient(k, q);
           if constexpr (enable_enlarged)
@@ -1156,14 +1240,22 @@ namespace NavierStokesScratch
         }
 
         if (enable_tracer_stabilization && !keep_tau_constant)
-          tau_supg_tracer[q] = StabilizationTools::compute_tau_supg(
-            time_handler,
-            dofs_per_cell,
-            cell_diameter,
-            param.finite_elements.tracer_degree,
-            mobility,
-            u_conv,
-            grad_shape_phi[q]);
+        {
+          // In a stationary pure phase at rest, the SUPG test operator is zero
+          // and tau's denominator vanishes. Disable this contribution locally.
+          if (time_handler.is_steady() && current_mobility == 0. &&
+              u_conv.norm_square() == 0.)
+            tau_supg_tracer[q] = 0.;
+          else
+            tau_supg_tracer[q] = StabilizationTools::compute_tau_supg(
+              time_handler,
+              dofs_per_cell,
+              cell_diameter,
+              param.finite_elements.tracer_degree,
+              current_mobility,
+              u_conv,
+              grad_shape_phi[q]);
+        }
       }
     }
 
@@ -1569,6 +1661,16 @@ namespace NavierStokesScratch
     double         dynamic_viscosity0;
     double         dynamic_viscosity1;
     double         mobility;
+    bool                                          variable_mobility;
+    bool                                          adaptive_mobility;
+    bool                                          gradient_dependent_mobility;
+    CahnHilliard::AdaptiveMobilityScaling         mobility_scaling;
+    CahnHilliard::MobilityEvaluationFunction<dim> mobility_function;
+    std::vector<CahnHilliard::MobilityEvaluation<dim>> mobility_evaluation;
+    std::vector<CahnHilliard::AdaptiveMobilityHessians<dim>> mobility_hessians;
+    std::vector<Tensor<1, dim>>                              mobility_gradient;
+    std::vector<Tensor<2, dim>>                              tracer_hessians;
+    std::vector<std::vector<Tensor<2, dim>>>                 hessian_shape_phi;
     double         epsilon;
     double         sigma_tilde;
     double         diffusive_flux_factor;

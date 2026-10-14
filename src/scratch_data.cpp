@@ -416,7 +416,14 @@ namespace NavierStokesScratch
     mobility              = ch.mobility;
     epsilon               = ch.epsilon_interface;
     sigma_tilde           = 3. / (2. * sqrt(2.)) * ch.surface_tension;
-    diffusive_flux_factor = mobility * 0.5 * (density1 - density0);
+    diffusive_flux_factor = 0.5 * (density1 - density0);
+    using MobilityModel = typename Parameters::CahnHilliard<dim>::MobilityModel;
+    variable_mobility   = ch.mobility_model != MobilityModel::constant;
+    adaptive_mobility   = CahnHilliard::is_adaptive_mobility_model(ch);
+    gradient_dependent_mobility =
+      ch.mobility_model == MobilityModel::adaptive_normal_velocity;
+    mobility_scaling      = CahnHilliard::get_adaptive_mobility_scaling(ch);
+    mobility_function     = CahnHilliard::get_mobility_evaluation_function(ch);
     body_force            = pp.body_force;
     tracer_limiter        = CahnHilliard::get_limiter_function(ch);
     if constexpr (enable_enlarged)
@@ -658,6 +665,22 @@ namespace NavierStokesScratch
                                     std::vector<double>(n_q_points));
 
       diffusive_flux.resize(n_q_points);
+      if (variable_mobility)
+      {
+        mobility_evaluation.resize(n_q_points);
+        if (enable_tracer_stabilization)
+        {
+          mobility_gradient.resize(n_q_points);
+          if (adaptive_mobility)
+            mobility_hessians.resize(n_q_points);
+          if (gradient_dependent_mobility)
+          {
+            tracer_hessians.resize(n_q_points);
+            hessian_shape_phi.resize(
+              n_q_points, std::vector<Tensor<2, dim>>(max_dofs_per_cell));
+          }
+        }
+      }
       shape_phi.resize(n_q_points, std::vector<double>(max_dofs_per_cell));
       grad_shape_phi.resize(n_q_points,
                             std::vector<Tensor<1, dim>>(max_dofs_per_cell));
