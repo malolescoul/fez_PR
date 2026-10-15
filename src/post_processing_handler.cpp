@@ -44,6 +44,12 @@ PostProcessingHandler<dim>::PostProcessingHandler(
     using PP       = Parameters::PostProcessing;
 
     postprocessors.clear();
+    if (ordering.has_variable(SolverInfo::VariableType::phase_tracer) &&
+        ordering.has_variable(SolverInfo::VariableType::phase_potential) &&
+        ordering.has_variable(SolverInfo::VariableType::pressure))
+      postprocessors.emplace_back(
+        std::make_unique<PostProcessingTools::AbelsPressurePostProcessor<dim>>(
+          ordering));
     if (pp.density.enable &&
         pp.density.method == PP::Density::ComputationMethod::discontinuous)
       postprocessors.emplace_back(

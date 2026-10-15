@@ -44,6 +44,12 @@ Newton iter.  1:          nonlinear residual = 9.09532601e-06	(M)
 	Line search with alpha = 1.000 : res = 4.61087841e-12
 Stopping because residual is below prescribed tolerance (1.00e-09)
 
+CHNS-ALE enlarged
+Mesh info:
+ dimension: 2
+ no. of cells: 32
+Number of degrees of freedom: 312
+
 Time step 1 - Advancing to t = 5.00e-02.
 Newton iter.  0:          nonlinear residual = 1.85723012e-01
 	Line search with alpha = 1.000 : res = 7.68696559e-03
