@@ -39,6 +39,12 @@ Newton iter.  1:          nonlinear residual = 2.48242328e-09	(M)
 	Line search with alpha = 1.000 : res = 4.22731323e-16
 Stopping because residual is below prescribed tolerance (1.00e-10)
 
+CHNS-ALE enlarged
+Mesh info:
+ dimension: 3
+ no. of cells: 48
+Number of degrees of freedom: 564
+
 Time step 1 - Advancing to t = 1.00e-02.
 Max absolute error analytical vs fd matrix is 5.48e-08
 Newton iter.  0:          nonlinear residual = 4.37822154e+00

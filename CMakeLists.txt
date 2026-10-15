@@ -24,6 +24,10 @@ option(LAGRANGE_MULTIPLIER_WITH_SOURCE_TERM "" OFF)
 # version to discriminate.
 option(REFERENCE_CELL_WITH_TEMPLATE_PARAMETER "" OFF)
 
+# Patched deal.II builds may provide these transformations before version 9.9.
+option(DEAL_II_WITH_MAPPING_FE_FIELD_HESSIANS
+       "The selected deal.II has backported MappingFEField Hessian support" OFF)
+
 # Find deal.II
 find_package(deal.II 9.5.0 REQUIRED HINTS ${DEAL_II_DIR} CONFIG)
 deal_ii_initialize_cached_variables()
@@ -58,6 +62,10 @@ endif()
 
 if(REFERENCE_CELL_WITH_TEMPLATE_PARAMETER)
   add_compile_definitions(REFERENCE_CELL_WITH_TEMPLATE_PARAMETER)
+endif()
+
+if(DEAL_II_WITH_MAPPING_FE_FIELD_HESSIANS)
+  add_compile_definitions(DEAL_II_WITH_MAPPING_FE_FIELD_HESSIANS)
 endif()
 
 # Macro to add a bundled library to the project sources

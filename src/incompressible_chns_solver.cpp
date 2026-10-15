@@ -78,6 +78,19 @@ bool CHNSSolver<dim, with_moving_mesh, with_enlarged>::
           this->newton_update[i] = (*this->present_solution)[i];
     }
     this->newton_update.compress(VectorOperation::insert);
+    if (this->time_handler.current_time_iteration == 0)
+    {
+      // Repeat the CHNS summary after the presolver's continuation and timers.
+      this->pcout << "\nCHNS-ALE" << (with_enlarged ? " enlarged" : "")
+                  << std::endl;
+      if (this->param.mesh.verbosity == Parameters::Verbosity::verbose)
+        this->pcout << "Mesh info:\n dimension: " << dim
+                    << "\n no. of cells: "
+                    << this->triangulation->n_global_active_cells()
+                    << std::endl;
+      this->pcout << "Number of degrees of freedom: "
+                  << this->dof_handler->n_dofs() << std::endl;
+    }
     return true;
   }
 }

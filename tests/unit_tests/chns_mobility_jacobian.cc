@@ -450,8 +450,9 @@ int main(int argc, char **argv)
     for (const bool stabilized : {false, true})
     {
       run_case<false>(model, stabilized, stabilized);
-#if !DEAL_II_VERSION_GTE(9, 9, 0)
-      // Earlier deal.II versions cannot transform MappingFEField Hessians.
+#if !DEAL_II_VERSION_GTE(9, 9, 0) && \
+  !defined(DEAL_II_WITH_MAPPING_FE_FIELD_HESSIANS)
+      // Earlier deal.II versions need the backported Hessian transformations.
       if (!stabilized)
 #endif
       {
@@ -466,7 +467,8 @@ int main(int argc, char **argv)
     for (const bool stabilized : {false, true})
     {
       run_case<false>(model, stabilized, stabilized, false, true);
-#if !DEAL_II_VERSION_GTE(9, 9, 0)
+#if !DEAL_II_VERSION_GTE(9, 9, 0) && \
+  !defined(DEAL_II_WITH_MAPPING_FE_FIELD_HESSIANS)
       if (!stabilized)
 #endif
       {
