@@ -261,6 +261,45 @@ namespace PostProcessingTools
     std::vector<Tensor<2, dim>> velocity_gradients;
   };
 
+  /**
+   * Reconstruct the Abels pressure p + phi*mu at visualization points.
+   * Use the solved phase directly, as in the capillary term phi*grad(mu).
+   */
+  template <int dim>
+  class AbelsPressurePostProcessor : public DataPostprocessorScalar<dim>
+  {
+  public:
+    AbelsPressurePostProcessor(const ComponentOrdering &ordering)
+      : DataPostprocessorScalar<dim>("pressure_abels", update_values)
+      , p_lower(ordering.p_lower)
+      , phi_lower(ordering.phi_lower)
+      , mu_lower(ordering.mu_lower)
+    {}
+
+    void evaluate_vector_field(
+      const DataPostprocessorInputs::Vector<dim> &input_data,
+      std::vector<Vector<double>> &computed_quantities) const override
+    {
+      AssertDimension(input_data.solution_values.size(),
+                      computed_quantities.size());
+      for (unsigned int q = 0; q < computed_quantities.size(); ++q)
+      {
+        const auto &values = input_data.solution_values[q];
+        AssertIndexRange(p_lower, values.size());
+        AssertIndexRange(phi_lower, values.size());
+        AssertIndexRange(mu_lower, values.size());
+        AssertDimension(computed_quantities[q].size(), 1);
+        computed_quantities[q][0] =
+          values[p_lower] + values[phi_lower] * values[mu_lower];
+      }
+    }
+
+  private:
+    const unsigned int p_lower;
+    const unsigned int phi_lower;
+    const unsigned int mu_lower;
+  };
+
   /** Reconstruct the CHNS mixture density at quadrature points. */
   template <int dim>
   class DensityEvaluator
