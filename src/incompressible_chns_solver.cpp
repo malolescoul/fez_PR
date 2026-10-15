@@ -22,6 +22,8 @@
 #include <scratch_data.h>
 #include <utilities.h>
 
+#include <limits>
+
 template <int dim, bool with_moving_mesh, bool with_enlarged>
 bool CHNSSolver<dim, with_moving_mesh, with_enlarged>::
   set_solver_specific_initial_mesh_position()
@@ -85,6 +87,16 @@ CHNSSolver<dim, with_moving_mesh, with_enlarged>::CHNSSolver(
   const ParameterReader<dim> &param)
   : NavierStokesSolver<dim, with_moving_mesh>(param)
 {
+  if (param.cahn_hilliard.enable_profile_correction)
+  {
+    AssertThrow(!this->time_handler.is_steady(),
+                ExcMessage("Profile correction currently requires transient "
+                           "CHNS, CHNS-ALE or enlarged CHNS-ALE."));
+    AssertThrow(param.cahn_hilliard.epsilon_interface > 0. &&
+                  param.cahn_hilliard.surface_tension > 0.,
+                ExcMessage("Profile correction requires positive interface "
+                           "thickness and surface tension."));
+  }
   if constexpr (with_enlarged)
   {
     // Enlarged ALE: same layout as the moving-mesh CHNS, with the extra psi
@@ -273,7 +285,13 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::MMSSourceTerm::
     mobility_data.derivative_wrt_tracer * grad_phi +
     grad_u * mobility_data.derivative_wrt_velocity +
     mms.exact_tracer->hessian(p) * mobility_data.derivative_wrt_tracer_gradient;
-  Tensor<1, dim> J_flux      = (M * 0.5 * (rho1 - rho0)) * grad_mu;
+  CahnHilliard::ProfileCorrection<dim> correction;
+  if (cahn_hilliard_param.enable_profile_correction)
+    correction = CahnHilliard::evaluate_profile_correction<dim>(
+      phi, grad_phi, mms.exact_tracer->hessian(p), epsilon);
+  Tensor<1, dim> J_flux =
+    0.5 * (rho1 - rho0) *
+    (M * grad_mu + profile_correction_coefficient * correction.flux);
   Tensor<1, dim> div_viscous = (eta * (lap_u + grad_div_u) +
                                 2. * detadphi * grad_phi * symmetrize(grad_u));
 
@@ -301,7 +319,8 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::MMSSourceTerm::
   // Tracer source term
   const double dphidt = mms.exact_tracer->time_derivative(p);
   const double lap_mu = mms.exact_potential->laplacian(p);
-  values[phi_lower] = -(dphidt + u * grad_phi - M * lap_mu - grad_M * grad_mu);
+  values[phi_lower] = -(dphidt + u * grad_phi - M * lap_mu - grad_M * grad_mu -
+                        profile_correction_coefficient * correction.divergence);
 
   // Potential source term
   const double mu      = mms.exact_potential->value(p);
@@ -401,6 +420,95 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::setup_assemblers()
   if constexpr (with_moving_mesh)
     Assembly::Elasticity::setup_assemblers<dim, ScratchData, CopyData>(
       this->param, *this->ordering, assemblers);
+}
+
+template <int dim, bool with_moving_mesh, bool with_enlarged>
+void CHNSSolver<dim, with_moving_mesh, with_enlarged>::prepare_timestep()
+{
+  if (this->param.cahn_hilliard.enable_profile_correction &&
+      this->param.mms_param.enable)
+  {
+    auto source = std::dynamic_pointer_cast<MMSSourceTerm>(this->source_terms);
+    AssertThrow(source, ExcInternalError());
+    // The manufactured source uses the exact current state, independently of
+    // the numerical state and of its Newton or diagnostic perturbations.
+    source->set_profile_correction_coefficient(
+      compute_profile_correction_coefficient(true));
+  }
+}
+
+template <int dim, bool with_moving_mesh, bool with_enlarged>
+double CHNSSolver<dim, with_moving_mesh, with_enlarged>::
+  compute_profile_correction_coefficient(const bool manufactured) const
+{
+  const auto &ch = this->param.cahn_hilliard;
+  if (!ch.enable_profile_correction)
+    return 0.;
+  double maximum = ch.mobility;
+  if (ch.mobility_model !=
+      Parameters::CahnHilliard<dim>::MobilityModel::constant)
+  {
+    const auto    evaluate = CahnHilliard::get_mobility_evaluation_function(ch);
+    const auto    scaling  = CahnHilliard::get_adaptive_mobility_scaling(ch);
+    FEValues<dim> values(manufactured ? *this->fixed_mapping :
+                                        *this->moving_mapping,
+                         *fe,
+                         *this->quadrature,
+                         update_values | update_gradients |
+                           update_quadrature_points);
+    const unsigned int               n_q = this->quadrature->size();
+    std::vector<double>              phase(n_q);
+    std::vector<Tensor<1, dim>>      gradients(n_q), velocities(n_q);
+    const FEValuesExtractors::Scalar tracer(this->ordering->phi_lower);
+    const FEValuesExtractors::Vector velocity(this->ordering->u_lower);
+    std::array<double, 2>            local = {{0., 0.}}, global;
+    for (const auto &cell : this->dof_handler->active_cell_iterators())
+      if (cell->is_locally_owned())
+      {
+        values.reinit(cell);
+        if (!manufactured)
+        {
+          values[tracer].get_function_values(this->evaluation_point, phase);
+          values[tracer].get_function_gradients(this->evaluation_point,
+                                                gradients);
+          values[velocity].get_function_values(this->evaluation_point,
+                                               velocities);
+        }
+        for (unsigned int q = 0; q < n_q; ++q)
+        {
+          if (manufactured)
+          {
+            const auto reference = values.quadrature_point(q);
+            Point<dim> point     = reference;
+            if constexpr (with_moving_mesh)
+              for (unsigned int d = 0; d < dim; ++d)
+                point[d] =
+                  this->param.mms.exact_mesh_position->value(reference, d);
+            phase[q]     = this->param.mms.exact_tracer->value(point);
+            gradients[q] = this->param.mms.exact_tracer->gradient(point);
+            for (unsigned int d = 0; d < dim; ++d)
+              velocities[q][d] =
+                this->param.mms.exact_velocity->value(point, d);
+          }
+          const double mobility =
+            evaluate(ch, phase[q], velocities[q], gradients[q], scaling).value;
+          if (std::isfinite(mobility))
+            local[0] = std::max(local[0], mobility);
+          else
+            local[1] = 1.;
+        }
+      }
+    // Every rank uses the same amplitude. A non-finite trial produces a
+    // non-finite residual so the line search can retry at a smaller step.
+    Utilities::MPI::max<double>(make_array_view(local),
+                                this->mpi_communicator,
+                                make_array_view(global));
+    maximum =
+      global[1] == 0. ? global[0] : std::numeric_limits<double>::quiet_NaN();
+  }
+  return ch.profile_correction_strength * 2. *
+         (3. / (2. * std::sqrt(2.)) * ch.surface_tension) /
+         ch.epsilon_interface * maximum;
 }
 
 template <int dim, bool with_moving_mesh, bool with_enlarged>
@@ -627,6 +735,9 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::assemble_matrix()
 {
   TimerOutput::Scope t(this->computing_timer, "Assemble matrix");
 
+  scratch_data->profile_correction_coefficient =
+    compute_profile_correction_coefficient();
+
   CopyData copy_data(*fe);
 
   this->system_matrix = 0;
@@ -683,6 +794,10 @@ template <int dim, bool with_moving_mesh, bool with_enlarged>
 void CHNSSolver<dim, with_moving_mesh, with_enlarged>::
   compare_analytical_matrix_with_fd()
 {
+  // Like tau, the global mobility amplitude stays fixed during local finite
+  // differences. Only global residual evaluations recompute its maximum.
+  scratch_data->profile_correction_coefficient =
+    compute_profile_correction_coefficient();
   CopyData copy_data(*fe);
   Verification::compare_analytical_matrix_with_fd<dim>(
     *this,
@@ -695,6 +810,9 @@ template <int dim, bool with_moving_mesh, bool with_enlarged>
 void CHNSSolver<dim, with_moving_mesh, with_enlarged>::assemble_rhs()
 {
   TimerOutput::Scope t(this->computing_timer, "Assemble RHS");
+
+  scratch_data->profile_correction_coefficient =
+    compute_profile_correction_coefficient();
 
   this->system_rhs = 0;
 

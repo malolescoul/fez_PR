@@ -1602,6 +1602,17 @@ namespace Parameters
                         "false",
                         Patterns::Bool(),
                         "Enable limiter for the tracer (phase field marker)");
+      prm.declare_entry(
+        "enable profile correction",
+        "false",
+        Patterns::Bool(),
+        "Implicit profile correction for transient CHNS, CHNS-ALE and "
+        "enlarged CHNS-ALE.");
+      prm.declare_entry("profile correction strength",
+                        "0.6",
+                        Patterns::Double(0.),
+                        "Multiplier of 2*M_max*sigma_tilde/epsilon in the "
+                        "profile correction flux.");
       // Moving-mesh forcing parameters
       prm.declare_entry(
         "mff source term",
@@ -1707,6 +1718,9 @@ namespace Parameters
       surface_tension     = prm.get_double("surface tension");
       epsilon_interface   = prm.get_double("interface thickness");
       with_tracer_limiter = prm.get_bool("enable tracer limiter");
+      enable_profile_correction = prm.get_bool("enable profile correction");
+      profile_correction_strength =
+        prm.get_double("profile correction strength");
       // moving-mesh forcing parameters
       const std::string parsed_mff_source_term = prm.get("mff source term");
       if (parsed_mff_source_term == "chns form")

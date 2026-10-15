@@ -821,6 +821,8 @@ namespace Parameters
     double surface_tension;
     double epsilon_interface;
     bool   with_tracer_limiter;
+    bool   enable_profile_correction   = false;
+    double profile_correction_strength = 0.6;
 
     // Mesh forcing parameters control the source term in the pseudosolid
     // equation of CHNS-ALE. Explicit names now distinguish the two factors.
