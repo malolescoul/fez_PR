@@ -66,6 +66,13 @@ public:
 
   // Update time-dependent prescribed phase boundary functions.
   virtual void set_solver_specific_time() override;
+  virtual void prepare_timestep() override;
+
+  /** Global correction amplitude from the Newton state, or the exact MMS state.
+   * Kept constant during cell Jacobian assembly and diagnostic perturbations.
+   */
+  double
+  compute_profile_correction_coefficient(const bool manufactured = false) const;
 
   virtual void create_solver_specific_zero_constraints() override;
   virtual void create_solver_specific_nonzero_constraints() override;
@@ -367,6 +374,11 @@ protected:
       , mms(param.mms)
     {}
 
+    void set_profile_correction_coefficient(const double coefficient)
+    {
+      profile_correction_coefficient = coefficient;
+    }
+
     // Update time in the mms functions
     virtual void set_time(const double new_time) override
     {
@@ -413,6 +425,7 @@ protected:
     const Parameters::PhysicalProperties<dim>       &physical_properties;
     const Parameters::CahnHilliard<dim>             &cahn_hilliard_param;
     ManufacturedSolutions::ManufacturedSolution<dim> mms;
+    double profile_correction_coefficient = 0.;
   };
 };
 

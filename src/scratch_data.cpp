@@ -233,6 +233,7 @@ namespace NavierStokesScratch
     , max_dofs_per_cell(other.max_dofs_per_cell)
     , time_handler(other.time_handler)
   {
+    profile_correction_coefficient = other.profile_correction_coefficient;
     if constexpr (has_hp_capabilities)
     {
       hp_fe_values = std::make_unique<hp::FEValues<dim>>(
@@ -665,6 +666,20 @@ namespace NavierStokesScratch
                                     std::vector<double>(n_q_points));
 
       diffusive_flux.resize(n_q_points);
+      if (param.cahn_hilliard.enable_profile_correction)
+      {
+        profile_correction_flux.resize(n_q_points);
+        if (enable_tracer_stabilization)
+          profile_correction_divergence.resize(n_q_points);
+      }
+      if (enable_tracer_stabilization &&
+          (gradient_dependent_mobility ||
+           param.cahn_hilliard.enable_profile_correction))
+      {
+        tracer_hessians.resize(n_q_points);
+        hessian_shape_phi.resize(
+          n_q_points, std::vector<Tensor<2, dim>>(max_dofs_per_cell));
+      }
       if (variable_mobility)
       {
         mobility_evaluation.resize(n_q_points);
@@ -673,12 +688,6 @@ namespace NavierStokesScratch
           mobility_gradient.resize(n_q_points);
           if (adaptive_mobility)
             mobility_hessians.resize(n_q_points);
-          if (gradient_dependent_mobility)
-          {
-            tracer_hessians.resize(n_q_points);
-            hessian_shape_phi.resize(
-              n_q_points, std::vector<Tensor<2, dim>>(max_dofs_per_cell));
-          }
         }
       }
       shape_phi.resize(n_q_points, std::vector<double>(max_dofs_per_cell));

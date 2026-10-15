@@ -1,0 +1,179 @@
+# Isolate BDF2 time convergence using spatial-polynomial manufactured fields.
+# Recompute the global mobility maximum on the current Newton state.
+# The profile shape is implicit; its global amplitude derivative is omitted.
+subsection Dimension
+  set dimension = 2
+end
+
+subsection Timer
+  set enable timer = false
+end
+
+subsection Output
+  set write vtu results = false
+  set output directory  = ../data/mms/
+  set output prefix     = solution
+end
+
+subsection Mesh
+  set dealii preset mesh     = rectangle
+  set dealii mesh parameters = 4, 4 : 0., 0. : 1., 1. : true
+  set refinement level       = 0
+end
+
+subsection Time integration
+  set verbosity        = quiet
+  set dt               = 0.1
+  set t_initial        = 0
+  set t_end            = 0.4
+  set scheme           = BDF2
+  set bdf start method = BDF1
+end
+
+subsection Nonlinear solver
+  set verbosity            = quiet
+  set tolerance            = 1e-12
+  set divergence_tolerance = 1e+4
+  set max_iterations       = 50
+  set enable_line_search   = true
+  set analytic_jacobian    = true
+end
+
+subsection Linear solver
+  subsection main physics
+    set verbosity = quiet
+    set method    = direct_mumps
+    set reuse     = true
+  end
+end
+
+subsection FiniteElements
+  set Velocity degree  = 2
+  set Pressure degree  = 1
+  set Tracer degree    = 2
+  set Potential degree = 2
+end
+
+subsection Stabilization
+  set enable supg        = true
+  set enable tracer supg = true
+end
+
+subsection Physical properties
+  set number of fluids = 2
+  subsection Fluid 0
+    set density             = 1.1
+    set kinematic viscosity = 2
+  end
+  subsection Fluid 1
+    set density             = 1
+    set kinematic viscosity = 1
+  end
+  set body force = 0, -9.81
+end
+
+subsection Cahn Hilliard
+  set enable profile correction = true
+  set profile correction strength = 0.6
+  subsection mobility
+    set constant value = 0.1
+    set model = Adaptive normal velocity
+    set scaling factor = 0.4
+    set mobility regularization = 0.001
+    set Function expression = 0.1*(1-x*x)^2
+  end
+  set surface tension     = 1
+  set interface thickness = 0.3
+end
+
+subsection Initial conditions
+  set to mms = true
+end
+
+subsection Fluid boundary conditions
+  set number = 4
+  set fix pressure constant      = true
+  set enforce zero mean pressure = false
+  subsection boundary 0
+    set id   = 0
+    set name = x_min
+    set type = velocity_mms
+  end
+  subsection boundary 1
+    set id   = 1
+    set name = x_max
+    set type = velocity_mms
+  end
+  subsection boundary 2
+    set id   = 2
+    set name = y_min
+    set type = velocity_mms
+  end
+  subsection boundary 3
+    set id   = 3
+    set name = y_max
+    set type = velocity_mms
+  end
+end
+
+subsection CahnHilliard boundary conditions
+  set number = 4
+  subsection boundary 0
+    set id   = 0
+    set name = x_min
+    set type = dirichlet_mms
+  end
+  subsection boundary 1
+    set id   = 1
+    set name = x_max
+    set type = dirichlet_mms
+  end
+  subsection boundary 2
+    set id   = 2
+    set name = y_min
+    set type = dirichlet_mms
+  end
+  subsection boundary 3
+    set id   = 3
+    set name = y_max
+    set type = dirichlet_mms
+  end
+end
+
+subsection Exact solution
+  subsection exact velocity
+    set Function expression = (0.4+0.1*y*y)*(1+0.2*sin(3*t)); (0.2-0.1*x*x)*(1+0.2*sin(3*t))
+  end
+  subsection exact pressure
+    set Function expression = 0.1*x*(1+0.2*sin(3*t))
+  end
+  subsection exact cahn hilliard tracer
+    set Function expression = (1.6*(x-0.5)+0.05*y*y)*(1+0.05*sin(2*t))
+  end
+  subsection exact cahn hilliard potential
+    set Function expression = (0.1*x*x+0.1*y*y)*(1+0.2*sin(3*t))
+  end
+end
+
+subsection Manufactured solution
+  set enable                 = true
+  set type                   = time
+  set convergence steps      = 4
+  set subtract mean pressure = false
+
+  subsection Space convergence
+    set norms to compute = L2_norm, Linfty_norm, H1_seminorm
+  end
+
+  subsection Time convergence
+    set norm                = Linfty
+    set use spatial mesh    = true
+    set spatial mesh index  = 0
+    set time step reduction = 0.5
+  end
+end
+
+subsection Debug
+  set verbosity            = quiet
+  set apply exact solution = false
+end

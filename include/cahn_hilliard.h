@@ -3,8 +3,131 @@
 
 #include <parameters.h>
 
+#include <cmath>
+
 namespace CahnHilliard
 {
+  template <int dim>
+  struct ProfileCorrection
+  {
+    dealii::Tensor<1, dim> flux;
+    double                 divergence = 0.;
+  };
+
+  /** Derivatives of the profile flux and its divergence at one quadrature
+   * point. The global mobility amplitude is held constant during linearization.
+   */
+  template <int dim>
+  struct ProfileCorrectionLinearization
+  {
+    dealii::Tensor<1, dim> flux_phi;
+    dealii::Tensor<2, dim> flux_gradient;
+    double                 divergence_phi = 0.;
+    dealii::Tensor<1, dim> divergence_gradient;
+
+    ProfileCorrection<dim>
+    variation(const double                  dphi,
+              const dealii::Tensor<1, dim> &dgradient,
+              const dealii::Tensor<2, dim> &dhessian) const
+    {
+      return {dphi * flux_phi + flux_gradient * dgradient,
+              divergence_phi * dphi + divergence_gradient * dgradient +
+                scalar_product(flux_gradient, dhessian)};
+    }
+  };
+
+  /**
+   * Regularized profile flux F = a(phi)*(1-c*q/R)*grad(phi), where
+   * q=(1-phi^2)/(sqrt(2)*epsilon), R^2=|grad(phi)|^2+beta^2*q^2 and
+   * c=sqrt(1+beta^2). Thus F vanishes for the equilibrium tanh profile.
+   * The C2 activation a turns the correction off near the pure phases;
+   * beta regularizes the normal where the phase gradient vanishes.
+   * The caller supplies the global mobility amplitude separately.
+   * When requested, compute the derivatives once for all trial functions.
+   */
+  template <int dim>
+  ProfileCorrection<dim> evaluate_profile_correction(
+    const double                         phi,
+    const dealii::Tensor<1, dim>        &gradient,
+    const dealii::Tensor<2, dim>        &hessian,
+    const double                         epsilon,
+    const bool                           compute_divergence = true,
+    ProfileCorrectionLinearization<dim> *linearization      = nullptr)
+  {
+    if (linearization)
+      *linearization = {};
+    constexpr double beta         = 0.05;
+    constexpr double tail         = 1. - 0.999 * 0.999;
+    const double     phase_factor = 1. - phi * phi;
+    if (phase_factor <= 0.25 * tail)
+      return {};
+
+    double a = 1., da = 0., dda = 0.;
+    if (phase_factor < 0.5 * tail)
+    {
+      const double width = 0.25 * tail;
+      const double t     = (phase_factor - width) / width;
+      const double dt    = -2. * phi / width;
+      const double first = 30. * t * t * (t - 1.) * (t - 1.);
+      a                  = t * t * t * (10. + t * (-15. + 6. * t));
+      da                 = first * dt;
+      if (linearization && compute_divergence)
+        dda =
+          60. * t * (2. * t * t - 3. * t + 1.) * dt * dt - 2. * first / width;
+    }
+    const double           q = phase_factor / (std::sqrt(2.) * epsilon);
+    const double           s = gradient.norm_square();
+    const double           R = std::sqrt(s + beta * beta * q * q);
+    const double           c = std::sqrt(1. + beta * beta);
+    const double           b = 1. - c * q / R;
+    const double           f = a * b;
+    ProfileCorrection<dim> result;
+    result.flux = f * gradient;
+    if (!compute_divergence && !linearization)
+      return result;
+
+    // With F = f(phi,s)*grad(phi), s=|grad(phi)|^2, its divergence is
+    // f*tr(H) + f_phi*s + 2*f_s*grad(phi).H.grad(phi).
+    const double dq     = -2. * phi / (std::sqrt(2.) * epsilon);
+    const double inv_R3 = 1. / (R * R * R);
+    const double b_phi  = -c * dq * s * inv_R3;
+    const double b_s    = 0.5 * c * q * inv_R3;
+    const double f_phi  = da * b + a * b_phi;
+    const double f_s    = a * b_s;
+    const auto   Hg     = hessian * gradient;
+    const double gHg    = gradient * Hg;
+    if (compute_divergence)
+      result.divergence = f * trace(hessian) + f_phi * s + 2. * f_s * gHg;
+    if (linearization)
+    {
+      linearization->flux_phi = f_phi * gradient;
+      linearization->flux_gradient =
+        2. * f_s * outer_product(gradient, gradient);
+      for (unsigned int d = 0; d < dim; ++d)
+        linearization->flux_gradient[d][d] += f;
+      if (compute_divergence)
+      {
+        const double ddq    = -2. / (std::sqrt(2.) * epsilon);
+        const double inv_R5 = inv_R3 / (R * R);
+        const double b_pp =
+          -c * s * (ddq * inv_R3 - 3. * beta * beta * q * dq * dq * inv_R5);
+        const double b_ps = -c * dq * (inv_R3 - 1.5 * s * inv_R5);
+        const double b_ss = -0.75 * c * q * inv_R5;
+        const double f_pp = dda * b + 2. * da * b_phi + a * b_pp;
+        const double f_ps = da * b_s + a * b_ps;
+        const double f_ss = a * b_ss;
+        linearization->divergence_phi =
+          f_phi * trace(hessian) + f_pp * s + 2. * f_ps * gHg;
+        linearization->divergence_gradient =
+          (2. * f_s * trace(hessian) + 2. * f_ps * s + 2. * f_phi +
+           4. * f_ss * gHg) *
+            gradient +
+          4. * f_s * Hg;
+      }
+    }
+    return result;
+  }
+
   /**
    * Simply return the passed phase marker
    */

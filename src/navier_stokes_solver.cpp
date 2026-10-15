@@ -350,6 +350,7 @@ void NavierStokesSolver<dim, with_moving_mesh>::run_time_subinterval(
       time_handler.advance(pcout);
       set_time();
       update_boundary_conditions();
+      prepare_timestep();
 
       if (time_handler.is_starting_step() &&
           param.time_integration.bdfstart ==
