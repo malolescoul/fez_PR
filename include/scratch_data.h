@@ -19,6 +19,8 @@
 #include <time_handler.h>
 #include <types.h>
 
+#include <array>
+
 /**
  * A namespace for the ScratchData used in the Navier-Stokes derived solvers.
  *
@@ -1032,11 +1034,22 @@ namespace NavierStokesScratch
       return variable_mobility ? mobility_evaluation[q].value : mobility;
     }
 
+    Tensor<1, dim> get_phase_flux(const unsigned int q) const
+    {
+      auto flux = get_mobility(q) * potential_gradients[q];
+      if (param.cahn_hilliard.enable_profile_correction)
+        flux += profile_correction_flux[q];
+      return flux;
+    }
+
     double get_phase_diffusion(const unsigned int q) const
     {
       return get_mobility(q) * potential_laplacians[q] +
              (variable_mobility ?
                 mobility_gradient[q] * potential_gradients[q] :
+                0.) +
+             (param.cahn_hilliard.enable_profile_correction ?
+                profile_correction_divergence[q] :
                 0.);
     }
 
@@ -1115,7 +1128,9 @@ namespace NavierStokesScratch
           fe_values_moving[potential].get_function_hessians(current_solution,
                                                             potential_hessians);
       }
-      if (gradient_dependent_mobility && enable_tracer_stabilization)
+      if ((gradient_dependent_mobility ||
+           param.cahn_hilliard.enable_profile_correction) &&
+          enable_tracer_stabilization)
         fe_values_moving[tracer].get_function_hessians(current_solution,
                                                        tracer_hessians);
       // Previous solutions
@@ -1123,8 +1138,21 @@ namespace NavierStokesScratch
         fe_values_moving[tracer].get_function_values(previous_solutions[i],
                                                      previous_tracer_values[i]);
 
-      source_terms.vector_value_list(fe_values_moving.get_quadrature_points(),
-                                     source_term_full_moving);
+      if (param.cahn_hilliard.enable_profile_correction)
+        for (unsigned int q = 0; q < n_q_points; ++q)
+        {
+          const auto correction = CahnHilliard::evaluate_profile_correction(
+            tracer_values[q],
+            tracer_gradients[q],
+            enable_tracer_stabilization ? tracer_hessians[q] : Tensor<2, dim>(),
+            epsilon,
+            enable_tracer_stabilization);
+          profile_correction_flux[q] =
+            profile_correction_coefficient * correction.flux;
+          if (enable_tracer_stabilization)
+            profile_correction_divergence[q] =
+              profile_correction_coefficient * correction.divergence;
+        }
 
       for (unsigned int q = 0; q < n_q_points; ++q)
       {
@@ -1186,9 +1214,8 @@ namespace NavierStokesScratch
           }
         }
         const double current_mobility = get_mobility(q);
-        diffusive_flux[q] = diffusive_flux_factor * current_mobility *
-                            present_velocity_gradients[q] *
-                            potential_gradients[q];
+        diffusive_flux[q]             = diffusive_flux_factor *
+                            present_velocity_gradients[q] * get_phase_flux(q);
 
         Tensor<1, dim> u_conv = present_velocity_values[q];
         if constexpr (enable_pseudo_solid)
@@ -1218,7 +1245,9 @@ namespace NavierStokesScratch
           // Shape functions on moving mesh
           shape_phi[q][k]      = fe_values_moving[tracer].value(k, q);
           grad_shape_phi[q][k] = fe_values_moving[tracer].gradient(k, q);
-          if (gradient_dependent_mobility && enable_tracer_stabilization)
+          if ((gradient_dependent_mobility ||
+               param.cahn_hilliard.enable_profile_correction) &&
+              enable_tracer_stabilization)
             hessian_shape_phi[q][k] = fe_values_moving[tracer].hessian(k, q);
           shape_mu[q][k]       = fe_values_moving[potential].value(k, q);
           grad_shape_mu[q][k]  = fe_values_moving[potential].gradient(k, q);
@@ -1699,6 +1728,12 @@ namespace NavierStokesScratch
     std::vector<double>         potential_laplacians;
     // Only used for the moving-mesh x-variation of the tracer SUPG residual.
     std::vector<Tensor<2, dim>> potential_hessians;
+
+    // Global amplitude from the current Newton state; frozen in local
+    // derivatives.
+    double                      profile_correction_coefficient = 0.;
+    std::vector<Tensor<1, dim>> profile_correction_flux;
+    std::vector<double>         profile_correction_divergence;
 
     std::vector<Tensor<1, dim>> diffusive_flux;
     std::vector<double>         tau_supg_tracer;

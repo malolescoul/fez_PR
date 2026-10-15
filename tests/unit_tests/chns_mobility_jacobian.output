@@ -1,2 +1,2 @@
 
-DEAL::Mobility Jacobians: fixed, ALE and enlarged, with and without stabilization OK
+DEAL::Mobility Jacobians: fixed, ALE and enlarged, with and without stabilization, and fixed/ALE/enlarged profile correction OK

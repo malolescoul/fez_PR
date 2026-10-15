@@ -160,6 +160,9 @@ public:
    */
   virtual void set_solver_specific_time() {}
 
+  // Prepare quantities shared by all Newton iterations of this time step.
+  virtual void prepare_timestep() {}
+
   /**
    * Distribute (number) the degrees of freedom and allocate the parallel matrix
    * and vectors.
