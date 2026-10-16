@@ -668,6 +668,9 @@ namespace NavierStokesScratch
       diffusive_flux.resize(n_q_points);
       if (param.cahn_hilliard.enable_profile_correction)
       {
+        profile_dof_indices.resize(max_dofs_per_cell);
+        profile_nodal_inverse.resize(max_dofs_per_cell);
+        reconstructed_profile.resize(n_q_points);
         profile_correction_flux.resize(n_q_points);
         if (enable_tracer_stabilization)
           profile_correction_divergence.resize(n_q_points);
@@ -676,7 +679,8 @@ namespace NavierStokesScratch
           (gradient_dependent_mobility ||
            param.cahn_hilliard.enable_profile_correction))
       {
-        tracer_hessians.resize(n_q_points);
+        if (gradient_dependent_mobility)
+          tracer_hessians.resize(n_q_points);
         hessian_shape_phi.resize(
           n_q_points, std::vector<Tensor<2, dim>>(max_dofs_per_cell));
       }

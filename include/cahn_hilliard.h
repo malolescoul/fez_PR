@@ -7,6 +7,89 @@
 
 namespace CahnHilliard
 {
+  constexpr double profile_correction_tail = 1. - 0.999 * 0.999;
+
+  struct ProfileInverse
+  {
+    double value;
+    double derivative;
+  };
+
+  /** Inverse tanh at phase nodes, with an odd C2 continuation near +/-1.
+   * The continuation has bounded positive slope, so pure phases and nodal
+   * overshoots remain finite without clipping the transported phase.
+   */
+  inline ProfileInverse inverse_profile(const double phi)
+  {
+    const double cutoff = std::sqrt(1. - 0.25 * profile_correction_tail);
+    if (std::abs(phi) <= cutoff)
+      return {std::atanh(phi), 1. / (1. - phi * phi)};
+    const double slope  = 1. / (1. - cutoff * cutoff);
+    const double length = (1. - cutoff * cutoff) / cutoff;
+    const double offset = std::abs(phi) - cutoff;
+    return {std::copysign(std::atanh(cutoff) +
+                            slope *
+                              (3. * offset +
+                               2. * length * std::expm1(-offset / length)),
+                          phi),
+            slope * (3. - 2. * std::exp(-offset / length))};
+  }
+
+  template <int dim>
+  struct ProfileVariation
+  {
+    double                 value;
+    dealii::Tensor<1, dim> gradient;
+    dealii::Tensor<2, dim> hessian;
+  };
+
+  /** The correction uses phi_r=tanh(s_h), where s_h interpolates the inverse
+   * phase values at the nodes. The CH equation and mobility still use phi_h.
+   * Store derivatives of s_h to differentiate the reconstruction without
+   * allocating another set of shape-function tables.
+   */
+  template <int dim>
+  struct ReconstructedProfile
+  {
+    double                 value = 0.;
+    dealii::Tensor<1, dim> inverse_gradient;
+    dealii::Tensor<2, dim> inverse_hessian;
+
+    dealii::Tensor<1, dim> gradient() const
+    {
+      return (1. - value * value) * inverse_gradient;
+    }
+
+    dealii::Tensor<2, dim> hessian() const
+    {
+      return (1. - value * value) *
+             (inverse_hessian -
+              2. * value * outer_product(inverse_gradient, inverse_gradient));
+    }
+
+    ProfileVariation<dim> variation(const double                  ds,
+                                    const dealii::Tensor<1, dim> &dg,
+                                    const dealii::Tensor<2, dim> &dh,
+                                    const bool with_hessian) const
+    {
+      const double          first  = 1. - value * value;
+      const double          second = -2. * value * first;
+      ProfileVariation<dim> result{first * ds,
+                                   first * dg + second * ds * inverse_gradient,
+                                   {}};
+      if (with_hessian)
+      {
+        const double third = -2. * (1. - 3. * value * value) * first;
+        result.hessian =
+          first * dh + second * ds * inverse_hessian +
+          third * ds * outer_product(inverse_gradient, inverse_gradient) +
+          second * (outer_product(dg, inverse_gradient) +
+                    outer_product(inverse_gradient, dg));
+      }
+      return result;
+    }
+  };
+
   template <int dim>
   struct ProfileCorrection
   {
@@ -57,7 +140,7 @@ namespace CahnHilliard
     if (linearization)
       *linearization = {};
     constexpr double beta         = 0.05;
-    constexpr double tail         = 1. - 0.999 * 0.999;
+    constexpr double tail         = profile_correction_tail;
     const double     phase_factor = 1. - phi * phi;
     if (phase_factor <= 0.25 * tail)
       return {};
