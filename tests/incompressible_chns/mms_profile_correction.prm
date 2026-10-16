@@ -1,4 +1,6 @@
-# Isolate BDF2 time convergence using spatial-polynomial manufactured fields.
+# Refine time on a fixed mesh with spatial-polynomial manufactured fields.
+# Nodal inverse/tanh reconstruction adds spatial error: the combined
+# space-time MMS checks convergence when that error dominates this test.
 # Recompute the global mobility maximum on the current Newton state.
 # The profile shape is implicit; its global amplitude derivative is omitted.
 subsection Dimension

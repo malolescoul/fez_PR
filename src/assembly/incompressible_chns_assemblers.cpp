@@ -408,10 +408,11 @@ namespace Assembly
         CahnHilliard::ProfileCorrectionLinearization<dim> correction;
         if (!sd.profile_correction_flux.empty())
           CahnHilliard::evaluate_profile_correction(
-            phi,
-            grad_phi,
-            BaseType::with_tracer_stabilization ? sd.tracer_hessians[q] :
-                                                  Tensor<2, dim>(),
+            sd.reconstructed_profile[q].value,
+            sd.reconstructed_profile[q].gradient(),
+            BaseType::with_tracer_stabilization ?
+              sd.reconstructed_profile[q].hessian() :
+              Tensor<2, dim>(),
             sd.epsilon,
             BaseType::with_tracer_stabilization,
             &correction);
@@ -435,12 +436,18 @@ namespace Assembly
           CahnHilliard::ProfileCorrection<dim> dcorrection;
           if (!sd.profile_correction_flux.empty())
           {
-            dcorrection =
-              correction.variation(phi_phi[j],
-                                   grad_phi_phi[j],
-                                   BaseType::with_tracer_stabilization ?
-                                     sd.hessian_shape_phi[q][j] :
-                                     Tensor<2, dim>());
+            const double inverse_derivative =
+              sd.profile_nodal_inverse[j].derivative;
+            const auto dprofile = sd.reconstructed_profile[q].variation(
+              inverse_derivative * phi_phi[j],
+              inverse_derivative * grad_phi_phi[j],
+              BaseType::with_tracer_stabilization ?
+                inverse_derivative * sd.hessian_shape_phi[q][j] :
+                Tensor<2, dim>(),
+              BaseType::with_tracer_stabilization);
+            dcorrection = correction.variation(dprofile.value,
+                                               dprofile.gradient,
+                                               dprofile.hessian);
             dcorrection.flux *= sd.profile_correction_coefficient;
             dcorrection.divergence *= sd.profile_correction_coefficient;
             correction_flux_variation[j] = dcorrection.flux;
@@ -543,8 +550,7 @@ namespace Assembly
 
             Tensor<2, dim> dhess_phi_x;
             if constexpr (BaseType::with_tracer_stabilization)
-              if (sd.gradient_dependent_mobility ||
-                  !sd.profile_correction_flux.empty())
+              if (sd.gradient_dependent_mobility)
               {
                 const auto &H = sd.tracer_hessians[q];
                 const auto &K = (*hessian_phi_x_moving)[j];
@@ -557,8 +563,22 @@ namespace Assembly
             CahnHilliard::ProfileCorrection<dim> dcorrection_x;
             if (!sd.profile_correction_flux.empty())
             {
-              dcorrection_x =
-                correction.variation(0., dgrad_phi_x, dhess_phi_x);
+              const auto    &profile      = sd.reconstructed_profile[q];
+              const auto     grad_profile = profile.gradient();
+              Tensor<2, dim> dhess_profile;
+              if constexpr (BaseType::with_tracer_stabilization)
+              {
+                const auto  H = profile.hessian();
+                const auto &K = (*hessian_phi_x_moving)[j];
+                dhess_profile = -(transpose_G * H + H * G);
+                for (unsigned int a = 0; a < dim; ++a)
+                  for (unsigned int b = 0; b < dim; ++b)
+                    for (unsigned int c = 0; c < dim; ++c)
+                      dhess_profile[a][b] -= grad_profile[c] * K[c][a][b];
+              }
+              dcorrection_x = correction.variation(0.,
+                                                   -transpose_G * grad_profile,
+                                                   dhess_profile);
               dcorrection_x.flux *= sd.profile_correction_coefficient;
               dcorrection_x.divergence *= sd.profile_correction_coefficient;
             }

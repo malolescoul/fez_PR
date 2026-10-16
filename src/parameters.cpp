@@ -1602,12 +1602,13 @@ namespace Parameters
                         "false",
                         Patterns::Bool(),
                         "Enable limiter for the tracer (phase field marker)");
-      prm.declare_entry(
-        "enable profile correction",
-        "false",
-        Patterns::Bool(),
-        "Implicit profile correction for transient CHNS, CHNS-ALE and "
-        "enlarged CHNS-ALE.");
+      prm.declare_entry("enable profile correction",
+                        "false",
+                        Patterns::Bool(),
+                        "Implicit correction of the nodally reconstructed "
+                        "profile for transient "
+                        "CHNS, CHNS-ALE and "
+                        "enlarged CHNS-ALE.");
       prm.declare_entry("profile correction strength",
                         "0.6",
                         Patterns::Double(0.),
