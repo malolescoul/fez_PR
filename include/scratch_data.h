@@ -1128,9 +1128,7 @@ namespace NavierStokesScratch
           fe_values_moving[potential].get_function_hessians(current_solution,
                                                             potential_hessians);
       }
-      if ((gradient_dependent_mobility ||
-           param.cahn_hilliard.enable_profile_correction) &&
-          enable_tracer_stabilization)
+      if (gradient_dependent_mobility && enable_tracer_stabilization)
         fe_values_moving[tracer].get_function_hessians(current_solution,
                                                        tracer_hessians);
       // Previous solutions
@@ -1138,13 +1136,56 @@ namespace NavierStokesScratch
         fe_values_moving[tracer].get_function_values(previous_solutions[i],
                                                      previous_tracer_values[i]);
 
-      if (param.cahn_hilliard.enable_profile_correction)
-        for (unsigned int q = 0; q < n_q_points; ++q)
+
+      for (unsigned int q = 0; q < n_q_points; ++q)
+      {
+        for (unsigned int k = 0; k < dofs_per_cell; ++k)
         {
+          // Shape functions on moving mesh
+          shape_phi[q][k]      = fe_values_moving[tracer].value(k, q);
+          grad_shape_phi[q][k] = fe_values_moving[tracer].gradient(k, q);
+          if ((gradient_dependent_mobility ||
+               param.cahn_hilliard.enable_profile_correction) &&
+              enable_tracer_stabilization)
+            hessian_shape_phi[q][k] = fe_values_moving[tracer].hessian(k, q);
+          shape_mu[q][k]      = fe_values_moving[potential].value(k, q);
+          grad_shape_mu[q][k] = fe_values_moving[potential].gradient(k, q);
+          if constexpr (enable_enlarged)
+          {
+            shape_psi[q][k]      = fe_values_moving[psi].value(k, q);
+            grad_shape_psi[q][k] = fe_values_moving[psi].gradient(k, q);
+          }
+          if (enable_tracer_stabilization)
+            laplacian_shape_mu[q][k] =
+              trace(fe_values_moving[potential].hessian(k, q));
+
+          // Shape functions on fixed mesh
+          if constexpr (enable_pseudo_solid)
+          {
+            shape_phi_fixed[q][k]      = fe_values_fixed[tracer].value(k, q);
+            grad_shape_phi_fixed[q][k] = fe_values_fixed[tracer].gradient(k, q);
+          }
+        }
+
+        if (param.cahn_hilliard.enable_profile_correction)
+        {
+          auto &profile        = reconstructed_profile[q];
+          profile              = {};
+          double inverse_value = 0.;
+          for (unsigned int k = 0; k < dofs_per_cell; ++k)
+            if (components[k] == phi_lower)
+            {
+              const double nodal = profile_nodal_inverse[k].value;
+              inverse_value += nodal * shape_phi[q][k];
+              profile.inverse_gradient += nodal * grad_shape_phi[q][k];
+              if (enable_tracer_stabilization)
+                profile.inverse_hessian += nodal * hessian_shape_phi[q][k];
+            }
+          profile.value         = std::tanh(inverse_value);
           const auto correction = CahnHilliard::evaluate_profile_correction(
-            tracer_values[q],
-            tracer_gradients[q],
-            enable_tracer_stabilization ? tracer_hessians[q] : Tensor<2, dim>(),
+            profile.value,
+            profile.gradient(),
+            enable_tracer_stabilization ? profile.hessian() : Tensor<2, dim>(),
             epsilon,
             enable_tracer_stabilization);
           profile_correction_flux[q] =
@@ -1154,8 +1195,6 @@ namespace NavierStokesScratch
               profile_correction_coefficient * correction.divergence;
         }
 
-      for (unsigned int q = 0; q < n_q_points; ++q)
-      {
         // Time derivatives
         tracer_time_derivatives[q] =
           time_handler.compute_time_derivative_at_quadrature_node(
@@ -1240,33 +1279,6 @@ namespace NavierStokesScratch
             grad_phi_u_first_component);
         }
 
-        for (unsigned int k = 0; k < dofs_per_cell; ++k)
-        {
-          // Shape functions on moving mesh
-          shape_phi[q][k]      = fe_values_moving[tracer].value(k, q);
-          grad_shape_phi[q][k] = fe_values_moving[tracer].gradient(k, q);
-          if ((gradient_dependent_mobility ||
-               param.cahn_hilliard.enable_profile_correction) &&
-              enable_tracer_stabilization)
-            hessian_shape_phi[q][k] = fe_values_moving[tracer].hessian(k, q);
-          shape_mu[q][k]       = fe_values_moving[potential].value(k, q);
-          grad_shape_mu[q][k]  = fe_values_moving[potential].gradient(k, q);
-          if constexpr (enable_enlarged)
-          {
-            shape_psi[q][k]      = fe_values_moving[psi].value(k, q);
-            grad_shape_psi[q][k] = fe_values_moving[psi].gradient(k, q);
-          }
-          if (enable_tracer_stabilization)
-            laplacian_shape_mu[q][k] =
-              trace(fe_values_moving[potential].hessian(k, q));
-
-          // Shape functions on fixed mesh
-          if constexpr (enable_pseudo_solid)
-          {
-            shape_phi_fixed[q][k]      = fe_values_fixed[tracer].value(k, q);
-            grad_shape_phi_fixed[q][k] = fe_values_fixed[tracer].gradient(k, q);
-          }
-        }
 
         if (enable_tracer_stabilization && !keep_tau_constant)
         {
@@ -1351,12 +1363,25 @@ namespace NavierStokesScratch
                                  source_terms,
                                  exact_solution);
       if constexpr (enable_cahn_hilliard)
+      {
+        if (param.cahn_hilliard.enable_profile_correction)
+        {
+          profile_dof_indices.resize(dofs_per_cell);
+          cell->get_dof_indices(profile_dof_indices);
+          for (unsigned int k = 0; k < dofs_per_cell; ++k)
+            profile_nodal_inverse[k] =
+              components[k] == phi_lower ?
+                CahnHilliard::inverse_profile(
+                  current_solution[profile_dof_indices[k]]) :
+                CahnHilliard::ProfileInverse{};
+        }
         reinit_cahn_hilliard_cell(*active_fe_values_fixed,
                                   *active_fe_values,
                                   current_solution,
                                   previous_solutions,
                                   source_terms,
                                   exact_solution);
+      }
       /**
        * Face contributions
        */
@@ -1732,6 +1757,9 @@ namespace NavierStokesScratch
     // Global amplitude from the current Newton state; frozen in local
     // derivatives.
     double                      profile_correction_coefficient = 0.;
+    std::vector<types::global_dof_index>      profile_dof_indices;
+    std::vector<CahnHilliard::ProfileInverse> profile_nodal_inverse;
+    std::vector<CahnHilliard::ReconstructedProfile<dim>> reconstructed_profile;
     std::vector<Tensor<1, dim>> profile_correction_flux;
     std::vector<double>         profile_correction_divergence;
 

@@ -186,36 +186,57 @@ namespace
         std::vector<double>              phase(scratch.n_q_points);
         std::vector<Tensor<1, 2>>        gradient(scratch.n_q_points),
           velocities(scratch.n_q_points);
-        std::vector<Tensor<2, 2>> hessian(scratch.n_q_points);
         physical[tracer].get_function_values(this->evaluation_point, phase);
         physical[tracer].get_function_gradients(this->evaluation_point,
                                                 gradient);
         physical[velocity].get_function_values(this->evaluation_point,
                                                velocities);
-        if (scratch.enable_tracer_stabilization)
-          physical[tracer].get_function_hessians(this->evaluation_point,
-                                                 hessian);
         const auto &ch = this->param.cahn_hilliard;
         const auto  mobility =
           CahnHilliard::get_mobility_evaluation_function(ch);
         const auto scaling = CahnHilliard::get_adaptive_mobility_scaling(ch);
         double     maximum = 0.;
+        std::vector<types::global_dof_index> dofs(fe.n_dofs_per_cell());
+        cell->get_dof_indices(dofs);
         for (unsigned int q = 0; q < scratch.n_q_points; ++q)
         {
           maximum = std::max(
             maximum,
             mobility(ch, phase[q], velocities[q], gradient[q], scaling).value);
+          // Independently reconstruct tanh(I_h(atanh(phi_i))). The nodal
+          // phase in this test stays inside the exact inverse interval.
+          double       inverse = 0.;
+          Tensor<1, 2> inverse_gradient;
+          Tensor<2, 2> inverse_hessian;
+          for (unsigned int k = 0; k < dofs.size(); ++k)
+            if (fe.system_to_component_index(k).first ==
+                this->ordering->phi_lower)
+            {
+              const double nodal = std::atanh(this->evaluation_point[dofs[k]]);
+              inverse += nodal * physical[tracer].value(k, q);
+              inverse_gradient += nodal * physical[tracer].gradient(k, q);
+              if (scratch.enable_tracer_stabilization)
+                inverse_hessian += nodal * physical[tracer].hessian(k, q);
+            }
+          const double reconstructed = std::tanh(inverse);
+          const double slope         = 1. - reconstructed * reconstructed;
+          const auto   reconstructed_gradient = slope * inverse_gradient;
+          const auto   reconstructed_hessian =
+            slope * inverse_hessian -
+            2. * reconstructed * slope *
+              outer_product(inverse_gradient, inverse_gradient);
           const auto expected = CahnHilliard::evaluate_profile_correction(
-            phase[q],
-            gradient[q],
-            hessian[q],
+            reconstructed,
+            reconstructed_gradient,
+            reconstructed_hessian,
             scratch.epsilon,
             scratch.enable_tracer_stabilization);
           const double amplitude = scratch.profile_correction_coefficient;
           AssertThrow(
             (scratch.profile_correction_flux[q] - amplitude * expected.flux)
                 .norm() < 1e-11,
-            ExcMessage("Profile flux must use the current physical phase."));
+            ExcMessage(
+              "Profile flux must use the reconstructed current phase."));
           if (scratch.enable_tracer_stabilization)
             AssertThrow(std::abs(scratch.profile_correction_divergence[q] -
                                  amplitude * expected.divergence) < 1e-11,
