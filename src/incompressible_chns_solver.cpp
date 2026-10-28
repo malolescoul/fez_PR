@@ -1,5 +1,6 @@
 #include <assembly/elasticity_assemblers.h>
 #include <assembly/incompressible_chns_assemblers.h>
+#include <chns_energy_diagnostics.h>
 #include <compare_matrix.h>
 #include <deal.II/base/multithread_info.h>
 #include <deal.II/base/work_stream.h>
@@ -100,6 +101,28 @@ CHNSSolver<dim, with_moving_mesh, with_enlarged>::CHNSSolver(
   const ParameterReader<dim> &param)
   : NavierStokesSolver<dim, with_moving_mesh>(param)
 {
+  if (param.cahn_hilliard.enable_energy_consistent_formulation)
+  {
+    using Scheme = Parameters::TimeIntegration::Scheme;
+    AssertThrow(param.time_integration.scheme == Scheme::BDF1 ||
+                  param.time_integration.scheme == Scheme::BDF2,
+                ExcMessage(
+                  "The energy-consistent formulation requires BDF1 or BDF2."));
+    AssertThrow(param.time_integration.scheme != Scheme::BDF2 ||
+                  (param.time_integration.bdfstart ==
+                     Parameters::TimeIntegration::BDFStart::BDF1 &&
+                   param.time_integration.bdf_starting_step_ratio > 0. &&
+                   param.time_integration.bdf_starting_step_ratio < 1.),
+                ExcMessage("Energy-consistent BDF2 requires bdf start method = "
+                           "BDF1 and 0 < bdf start step ratio < 1."));
+    AssertThrow(param.cahn_hilliard.epsilon_interface > 0. &&
+                  param.cahn_hilliard.surface_tension > 0.,
+                ExcMessage("Energy-consistent CHNS requires positive interface "
+                           "thickness and surface tension."));
+    AssertThrow(param.physical_properties.fluids[0].density > 0. &&
+                  param.physical_properties.fluids[1].density > 0.,
+                ExcMessage("Kinetic density must be positive in both fluids."));
+  }
   if (param.cahn_hilliard.enable_profile_correction)
   {
     AssertThrow(!this->time_handler.is_steady(),
@@ -250,16 +273,23 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::MMSSourceTerm::
   vector_value(const Point<dim> &p, Vector<double> &values) const
 {
   const double phi          = mms.exact_tracer->value(p);
-  const double filtered_phi = phi;
+  const bool   energy_form =
+    cahn_hilliard_param.enable_energy_consistent_formulation;
+  const double filtered_phi =
+    energy_form ? CahnHilliard::tracer_limiter(phi) : phi;
+  const double limiter_derivative = energy_form && std::abs(phi) > 1. ? 0. : 1.;
   const double rho0         = physical_properties.fluids[0].density;
   const double rho1         = physical_properties.fluids[1].density;
-  const double rho  = CahnHilliard::linear_mixing(filtered_phi, rho0, rho1);
+  const double rho = CahnHilliard::linear_mixing(phi, rho0, rho1);
+  const double kinetic_rho =
+    CahnHilliard::linear_mixing(filtered_phi, rho0, rho1);
   const double eta0 = rho0 * physical_properties.fluids[0].kinematic_viscosity;
   const double eta1 = rho1 * physical_properties.fluids[1].kinematic_viscosity;
   const double eta  = CahnHilliard::linear_mixing(filtered_phi, eta0, eta1);
   // const double drhodphi =
   //   CahnHilliard::linear_mixing_derivative(filtered_phi, rho0, rho1);
   const double detadphi =
+    limiter_derivative *
     CahnHilliard::linear_mixing_derivative(filtered_phi, eta0, eta1);
   const double epsilon = cahn_hilliard_param.epsilon_interface;
   const double sigma_tilde =
@@ -311,6 +341,52 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::MMSSourceTerm::
   // Navier-Stokes momentum (velocity) source term
   Tensor<1, dim> f = -(rho * (dudt_eulerian + uDotGradu - body_force) +
                        J_flux * grad_u + grad_p - div_viscous + phi * grad_mu);
+  if (cahn_hilliard_param.enable_energy_consistent_formulation)
+  {
+    const double beta  = 0.5 * (rho0 - rho1);
+    const double div_Q = M * mms.exact_potential->laplacian(p) +
+                         grad_M * grad_mu +
+                         profile_correction_coefficient * correction.divergence;
+    Tensor<1, dim> mesh_velocity;
+    if constexpr (with_moving_mesh)
+      if (std::abs(phi) > 1.)
+      {
+        // Mesh position is prescribed in reference coordinates, whereas the
+        // fluid MMS is evaluated at the physical point p. Invert the exact
+        // map to evaluate its velocity when the two density extensions differ.
+        Point<dim> reference = p;
+        bool       converged = false;
+        for (unsigned int iteration = 0; iteration < 30; ++iteration)
+        {
+          Tensor<1, dim> residual;
+          Tensor<2, dim> jacobian;
+          for (unsigned int d = 0; d < dim; ++d)
+          {
+            residual[d] = mms.exact_mesh_position->value(reference, d) - p[d];
+            jacobian[d] = mms.exact_mesh_position->gradient(reference, d);
+          }
+          if (residual.norm() <= 1.e-12 * (1. + p.norm()))
+          {
+            converged = true;
+            break;
+          }
+          reference -= invert(jacobian) * residual;
+        }
+        AssertThrow(converged,
+                    ExcMessage(
+                      "Cannot invert the exact ALE map for the energy MMS."));
+        for (unsigned int d = 0; d < dim; ++d)
+          mesh_velocity[d] =
+            mms.exact_mesh_position->time_derivative(reference, d);
+      }
+    const double phase_rate = mms.exact_tracer->time_derivative(p);
+    const double mass_residual =
+      beta * (limiter_derivative * phase_rate + u * grad_phi - div_Q +
+              (limiter_derivative - 1.) * (mesh_velocity * grad_phi)) +
+      rho * mms.exact_velocity->divergence(p);
+    f -= (kinetic_rho - rho) * (dudt_eulerian + mesh_velocity * grad_u) +
+         0.5 * mass_residual * u;
+  }
   for (unsigned int d = 0; d < dim; ++d)
     values[u_lower + d] = f[d];
 
@@ -334,6 +410,9 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::MMSSourceTerm::
   const double lap_mu = mms.exact_potential->laplacian(p);
   values[phi_lower] = -(dphidt + u * grad_phi - M * lap_mu - grad_M * grad_mu -
                         profile_correction_coefficient * correction.divergence);
+
+  if (cahn_hilliard_param.enable_energy_consistent_formulation)
+    values[phi_lower] -= phi * mms.exact_velocity->divergence(p);
 
   // Potential source term
   const double mu      = mms.exact_potential->value(p);
@@ -452,7 +531,8 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::prepare_timestep()
 
 template <int dim, bool with_moving_mesh, bool with_enlarged>
 double CHNSSolver<dim, with_moving_mesh, with_enlarged>::
-  compute_profile_correction_coefficient(const bool manufactured) const
+  compute_profile_correction_coefficient(const bool manufactured,
+                                         const bool postprocessing) const
 {
   const auto &ch = this->param.cahn_hilliard;
   if (!ch.enable_profile_correction)
@@ -481,11 +561,11 @@ double CHNSSolver<dim, with_moving_mesh, with_enlarged>::
         values.reinit(cell);
         if (!manufactured)
         {
-          values[tracer].get_function_values(this->evaluation_point, phase);
-          values[tracer].get_function_gradients(this->evaluation_point,
-                                                gradients);
-          values[velocity].get_function_values(this->evaluation_point,
-                                               velocities);
+          const auto &state =
+            postprocessing ? *this->present_solution : this->evaluation_point;
+          values[tracer].get_function_values(state, phase);
+          values[tracer].get_function_gradients(state, gradients);
+          values[velocity].get_function_values(state, velocities);
         }
         for (unsigned int q = 0; q < n_q; ++q)
         {
@@ -536,6 +616,54 @@ template <int dim, bool with_moving_mesh, bool with_enlarged>
 void CHNSSolver<dim, with_moving_mesh, with_enlarged>::
   create_solver_specific_zero_constraints()
 {
+  if (this->param.cahn_hilliard.enable_energy_consistent_formulation)
+  {
+    using Type               = BoundaryConditions::Type;
+    unsigned int unsupported = numbers::invalid_unsigned_int;
+    // The conservative volume forms omit open-boundary flux integrals.
+    // Accept impermeable stationary walls, or full manufactured traces whose
+    // test functions vanish. Check mesh faces too, including unspecified IDs.
+    for (const auto &cell : this->dof_handler->active_cell_iterators())
+      if (cell->is_locally_owned())
+        for (const auto &face : cell->face_iterators())
+          if (face->at_boundary())
+          {
+            const auto id        = face->boundary_id();
+            const auto fluid     = this->param.fluid_bc.find(id);
+            const auto phase     = this->param.cahn_hilliard_bc.find(id);
+            bool       supported = false;
+            if (fluid != this->param.fluid_bc.end() &&
+                phase != this->param.cahn_hilliard_bc.end())
+            {
+              const bool manufactured =
+                this->param.mms_param.enable &&
+                fluid->second.type == Type::velocity_mms &&
+                phase->second.type == Type::dirichlet_mms;
+              bool wall = (fluid->second.type == Type::no_slip ||
+                           fluid->second.type == Type::slip) &&
+                          phase->second.type == Type::no_flux;
+              if constexpr (with_moving_mesh)
+              {
+                const auto mesh = this->param.pseudosolid_bc.find(id);
+                wall = wall && mesh != this->param.pseudosolid_bc.end() &&
+                       mesh->second.type == Type::fixed;
+              }
+              supported = manufactured || wall;
+            }
+            if (!supported)
+              unsupported =
+                std::min(unsupported, static_cast<unsigned int>(id));
+          }
+    unsupported = Utilities::MPI::min(unsupported, this->mpi_communicator);
+    AssertThrow(
+      unsupported == numbers::invalid_unsigned_int,
+      ExcMessage(
+        "Unsupported boundary id " + std::to_string(unsupported) +
+        " for the energy-consistent formulation. Use no_slip/slip "
+        "with phase no_flux (and fixed boundary mesh position in ALE), "
+        "or manufactured velocity and phase traces. Open boundaries "
+        "and moving physical walls require boundary flux terms."));
+  }
   for (const auto &[id, bc] : this->param.cahn_hilliard_bc)
   {
     /**
@@ -922,6 +1050,61 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::
   solver_specific_post_processing()
 {
   TimerOutput::Scope t(this->computing_timer, "Compute multiphase indicators");
+  const auto        &pp = this->param.postprocessing;
+  if (pp.chns_conservation.enable || pp.chns_energy.enable ||
+      pp.chns_phase_energy.enable || pp.chns_stabilization_energy.enable)
+  {
+    // Reuse the assembly's physical fields and strong residuals. A private
+    // scratch keeps diagnostics from changing the Newton assembly state.
+    ScratchData diagnostics(*scratch_data);
+    diagnostics.set_keep_tau_constant(false);
+    diagnostics.profile_correction_coefficient =
+      compute_profile_correction_coefficient(false, true);
+    CHNSEnergy::Integrals local, global;
+    const bool transient = !this->time_handler.is_steady() &&
+                           this->time_handler.current_time_iteration > 0 &&
+                           this->time_handler.current_time_iteration !=
+                             this->time_handler.time_iteration_at_last_restart;
+    std::vector<Tensor<1, dim>> old_gradient(this->quadrature->size()),
+      gradient_rate(this->quadrature->size());
+    for (const auto &cell : this->dof_handler->active_cell_iterators())
+      if (cell->is_locally_owned())
+      {
+        diagnostics.reinit(cell,
+                           *this->present_solution,
+                           *this->previous_solutions,
+                           *this->source_terms,
+                           *this->exact_solution);
+        const auto &values = diagnostics.get_current_fe_values();
+        std::fill(gradient_rate.begin(), gradient_rate.end(), Tensor<1, dim>());
+        if (transient)
+        {
+          const auto &c = this->time_handler.get_bdf_coefficients();
+          for (unsigned int q = 0; q < diagnostics.n_q_points; ++q)
+            gradient_rate[q] = c[0] * diagnostics.tracer_gradients[q];
+          for (unsigned int k = 1; k < c.size(); ++k)
+          {
+            values[diagnostics.tracer].get_function_gradients(
+              (*this->previous_solutions)[k - 1], old_gradient);
+            for (unsigned int q = 0; q < diagnostics.n_q_points; ++q)
+              gradient_rate[q] += c[k] * old_gradient[q];
+          }
+        }
+        for (unsigned int q = 0; q < diagnostics.n_q_points; ++q)
+          CHNSEnergy::integrate_point<dim>(diagnostics,
+                                           q,
+                                           gradient_rate[q],
+                                           values.quadrature_point(q),
+                                           transient ||
+                                             this->time_handler.is_steady(),
+                                           local);
+      }
+    Utilities::MPI::sum<double>(make_array_view(local.values),
+                                this->mpi_communicator,
+                                make_array_view(global.values));
+    this->postproc_handler->process_chns_energy(global, this->time_handler);
+  }
+
 
   this->postproc_handler->compute_multiphase_indicators(*this->ordering,
                                                         *this->dof_handler,

@@ -1,6 +1,7 @@
 
 #include <boost/archive/text_iarchive.hpp>
 #include <boost/archive/text_oarchive.hpp>
+#include <cahn_hilliard.h>
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/error_estimator.h>
 #include <deal.II/numerics/solution_transfer.h>
@@ -16,6 +17,9 @@
 #include <post_processing_handler.h>
 #include <solver_info.h>
 #include <utilities.h>
+
+#include <algorithm>
+#include <limits>
 
 template <int dim, bool with_moving_mesh>
 NavierStokesSolver<dim, with_moving_mesh>::NavierStokesSolver(
@@ -1255,6 +1259,14 @@ void NavierStokesSolver<dim, with_moving_mesh>::compute_error_estimate()
                 1,
               ExcMessage("Adaptation is limited to a single variable for now"));
 
+  const auto &tree_amr = param.mesh.adaptation.tree_amr;
+  if (tree_amr.refinement_strategy ==
+      Parameters::Mesh::Adaptation::TreeAMR::RefinementStrategy::InterfaceBand)
+  {
+    compute_interface_band_levels();
+    return;
+  }
+
   for (const auto variable :
        param.mesh.adaptation.tree_amr.variables_for_adaptation)
   {
@@ -1266,6 +1278,67 @@ void NavierStokesSolver<dim, with_moving_mesh>::compute_error_estimate()
       *present_solution,
       cellwise_refinement_criterion,
       get_component_mask(variable));
+  }
+}
+
+template <int dim, bool with_moving_mesh>
+void NavierStokesSolver<dim, with_moving_mesh>::compute_interface_band_levels()
+{
+  const auto &tree_amr = param.mesh.adaptation.tree_amr;
+  AssertThrow(tree_amr.variables_for_adaptation.size() == 1 &&
+                tree_amr.variables_for_adaptation[0] ==
+                  SolverInfo::VariableType::phase_tracer,
+              ExcMessage("The interface band adaptation requires "
+                         "'variables for adaptation = phase_tracer'."));
+
+  // Distance to the interface reconstructed from phi as in the profile
+  // correction, d = sqrt(2) eps g(phi) with g = atanh continued near +/-1.
+  const double        eps   = param.cahn_hilliard.epsilon_interface;
+  const double        scale = std::sqrt(2.) * eps;
+  std::vector<double> band_distances;
+  for (const double threshold : tree_amr.interface_band_thresholds)
+    band_distances.push_back(scale *
+                               CahnHilliard::inverse_profile(threshold).value +
+                             tree_amr.interface_band_margin * eps);
+
+  const ComponentMask tracer_mask =
+    get_component_mask(SolverInfo::VariableType::phase_tracer);
+  Vector<double> local_values;
+
+  // The criterion stores the target level of each cell.
+  for (const auto &cell : dof_handler->active_cell_iterators() |
+                            IteratorFilters::LocallyOwnedCell())
+  {
+    const auto &fe = cell->get_fe();
+    local_values.reinit(fe.n_dofs_per_cell());
+    cell->get_dof_values(*present_solution, local_values);
+
+    double min_phi  = std::numeric_limits<double>::max();
+    double max_phi  = std::numeric_limits<double>::lowest();
+    double distance = std::numeric_limits<double>::max();
+    for (unsigned int i = 0; i < fe.n_dofs_per_cell(); ++i)
+      if (tracer_mask[fe.system_to_component_index(i).first])
+      {
+        const double phi = local_values[i];
+        min_phi          = std::min(min_phi, phi);
+        max_phi          = std::max(max_phi, phi);
+        distance =
+          std::min(distance,
+                   std::abs(scale * CahnHilliard::inverse_profile(phi).value));
+      }
+    // A sign change means that the interface crosses the cell.
+    if (min_phi < 0. && max_phi > 0.)
+      distance = 0.;
+
+    unsigned int target = tree_amr.min_level;
+    for (unsigned int k = 0; k < band_distances.size(); ++k)
+      if (distance < band_distances[k])
+      {
+        target = std::max<int>(tree_amr.min_level,
+                               static_cast<int>(tree_amr.max_level) - int(k));
+        break;
+      }
+    cellwise_refinement_criterion[cell->active_cell_index()] = target;
   }
 }
 
@@ -1417,6 +1490,7 @@ void NavierStokesSolver<dim, with_moving_mesh>::checkpoint()
   }
 
   triangulation->save(tmp_checkpoint_prefix);
+  postproc_handler->save_chns_energy(tmp_checkpoint_prefix);
 
   replace_temporary_files(param.output.output_dir,
                           "tmp." + param.checkpoint_restart.filename,
@@ -1449,6 +1523,8 @@ void NavierStokesSolver<dim, with_moving_mesh>::restart()
     archive >> *this;
     archive >> time_handler;
   }
+
+  postproc_handler->load_chns_energy(checkpoint_prefix);
 
   // Update the time handler
   time_handler.update_parameters_after_restart(param.time_integration);

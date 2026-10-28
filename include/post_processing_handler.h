@@ -1,6 +1,7 @@
 #ifndef POST_PROCESSING_HANDLER_H
 #define POST_PROCESSING_HANDLER_H
 
+#include <chns_energy.h>
 #include <components_ordering.h>
 #include <deal.II/base/table_handler.h>
 #include <deal.II/base/timer.h>
@@ -294,6 +295,11 @@ public:
   /**
    * Reset the underlying data and vectors.
    */
+  void process_chns_energy(const CHNSEnergy::Integrals &data,
+                           const TimeHandler           &time_handler);
+  void save_chns_energy(const std::string &prefix) const;
+  void load_chns_energy(const std::string &prefix);
+
   void clear();
 
   /**
@@ -547,6 +553,15 @@ private:
 
   // For multiphase flows: average velocity in each phase
   TableHandler average_velocity_phases;
+
+  std::array<TableHandler, 4> chns_energy_tables;
+  bool                        chns_energy_initialized = false;
+  unsigned int chns_energy_last_iteration = numbers::invalid_unsigned_int;
+  double       chns_energy_reference_time = 0., chns_energy_last_time = 0.;
+  double       chns_initial_mass = 0., chns_initial_phase = 0.,
+               chns_initial_energy  = 0.;
+  double       chns_previous_energy = 0.;
+  std::array<double, 3> chns_stabilization_work{};
 };
 
 /* ---------------- Template functions ----------------- */

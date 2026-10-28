@@ -1,0 +1,128 @@
+Number of MPI processes: 1
+Mesh info:
+ dimension: 2
+ no. of cells: 32
+ boundary indicators: 0(4 faces) 1(4 faces) 2(4 faces) 3(4 faces)
+ID 0 -> x_min
+ID 1 -> x_max
+ID 2 -> y_min
+ID 3 -> y_max
+Number of degrees of freedom: 349
+chns_conservation at t=0: energy=2.40997, stabilization power=0
+chns_energy at t=0: energy=2.40997, stabilization power=0
+chns_phase_energy at t=0: energy=2.40997, stabilization power=0
+chns_stabilization_energy at t=0: energy=2.40997, stabilization power=0
+
+Time step 1 - Advancing to t = 0.001.
+Newton iter.  0:          nonlinear residual = 2.26619276e-01
+	Line search with alpha = 1.000 : res = 5.04507385e-05
+Newton iter.  1:          nonlinear residual = 5.04507385e-05	(M)
+	Line search with alpha = 1.000 : res = 1.47273451e-06
+Newton iter.  2:          nonlinear residual = 1.47273451e-06	(M)
+	Line search with alpha = 1.000 : res = 6.74380249e-08
+Newton iter.  3:          nonlinear residual = 6.74380249e-08	(M)
+	Line search with alpha = 1.000 : res = 4.46873239e-09
+Newton iter.  4:          nonlinear residual = 4.46873239e-09	(M)
+	Line search with alpha = 1.000 : res = 3.18290381e-10
+Newton iter.  5:          nonlinear residual = 3.18290381e-10	(M)
+	Line search with alpha = 1.000 : res = 1.65987162e-11
+Newton iter.  6:          nonlinear residual = 1.65987162e-11	(M)
+	Line search with alpha = 1.000 : res = 1.19630964e-12
+Stopping because residual is below prescribed tolerance (1.00e-11)
+chns_conservation at t=1.00e-03: energy=2.41e+00, stabilization power=6.99e-05
+chns_energy at t=1.00e-03: energy=2.41e+00, stabilization power=6.99e-05
+chns_phase_energy at t=1.00e-03: energy=2.41e+00, stabilization power=6.99e-05
+chns_stabilization_energy at t=1.00e-03: energy=2.41e+00, stabilization power=6.99e-05
+
+Time step 2 - Advancing to t = 2.00e-03.
+Newton iter.  0:          nonlinear residual = 3.91243377e-02
+	Line search with alpha = 1.000 : res = 5.77253903e-06
+Newton iter.  1:          nonlinear residual = 5.77253903e-06	(M)
+	Line search with alpha = 1.000 : res = 5.12012002e-07
+Newton iter.  2:          nonlinear residual = 5.12012002e-07	(M)
+	Line search with alpha = 1.000 : res = 3.90584278e-08
+Newton iter.  3:          nonlinear residual = 3.90584278e-08	(M)
+	Line search with alpha = 1.000 : res = 2.84459232e-09
+Newton iter.  4:          nonlinear residual = 2.84459232e-09	(M)
+	Line search with alpha = 1.000 : res = 2.07625634e-10
+Newton iter.  5:          nonlinear residual = 2.07625634e-10	(M)
+	Line search with alpha = 1.000 : res = 1.53522308e-11
+Newton iter.  6:          nonlinear residual = 1.53522308e-11	(M)
+	Line search with alpha = 1.000 : res = 1.12686642e-12
+Stopping because residual is below prescribed tolerance (1.00e-11)
+chns_conservation at t=2.00e-03: energy=2.41e+00, stabilization power=1.09e-04
+chns_energy at t=2.00e-03: energy=2.41e+00, stabilization power=1.09e-04
+chns_phase_energy at t=2.00e-03: energy=2.41e+00, stabilization power=1.09e-04
+chns_stabilization_energy at t=2.00e-03: energy=2.41e+00, stabilization power=1.09e-04
+
+Time step 3 - Advancing to t = 3.00e-03.
+Newton iter.  0:          nonlinear residual = 3.18546302e-02
+	Line search with alpha = 1.000 : res = 5.43861965e-06
+Newton iter.  1:          nonlinear residual = 5.43861965e-06	(M)
+	Line search with alpha = 1.000 : res = 2.44519032e-07
+Newton iter.  2:          nonlinear residual = 2.44519032e-07	(M)
+	Line search with alpha = 1.000 : res = 9.81596953e-09
+Newton iter.  3:          nonlinear residual = 9.81596953e-09	(M)
+	Line search with alpha = 1.000 : res = 4.68333201e-10
+Newton iter.  4:          nonlinear residual = 4.68333201e-10	(M)
+	Line search with alpha = 1.000 : res = 2.21756257e-11
+Newton iter.  5:          nonlinear residual = 2.21756257e-11	(M)
+	Line search with alpha = 1.000 : res = 1.04105158e-12
+Stopping because residual is below prescribed tolerance (1.00e-11)
+chns_conservation at t=3.00e-03: energy=2.41e+00, stabilization power=1.23e-04
+chns_energy at t=3.00e-03: energy=2.41e+00, stabilization power=1.23e-04
+chns_phase_energy at t=3.00e-03: energy=2.41e+00, stabilization power=1.23e-04
+chns_stabilization_energy at t=3.00e-03: energy=2.41e+00, stabilization power=1.23e-04
+
+Time step 4 - Advancing to t = 4.00e-03.
+Newton iter.  0:          nonlinear residual = 2.88944097e-02
+	Line search with alpha = 1.000 : res = 3.51968547e-06
+Newton iter.  1:          nonlinear residual = 3.51968547e-06	(M)
+	Line search with alpha = 1.000 : res = 9.85691520e-08
+Newton iter.  2:          nonlinear residual = 9.85691520e-08	(M)
+	Line search with alpha = 1.000 : res = 3.14902461e-09
+Newton iter.  3:          nonlinear residual = 3.14902461e-09	(M)
+	Line search with alpha = 1.000 : res = 1.06012518e-10
+Newton iter.  4:          nonlinear residual = 1.06012518e-10	(M)
+	Line search with alpha = 1.000 : res = 4.30489378e-12
+Stopping because residual is below prescribed tolerance (1.00e-11)
+chns_conservation at t=4.00e-03: energy=2.41e+00, stabilization power=1.29e-04
+chns_energy at t=4.00e-03: energy=2.41e+00, stabilization power=1.29e-04
+chns_phase_energy at t=4.00e-03: energy=2.41e+00, stabilization power=1.29e-04
+chns_stabilization_energy at t=4.00e-03: energy=2.41e+00, stabilization power=1.29e-04
+
+Time step 5 - Advancing to t = 5.00e-03.
+Newton iter.  0:          nonlinear residual = 2.65872253e-02
+	Line search with alpha = 1.000 : res = 2.17451262e-06
+Newton iter.  1:          nonlinear residual = 2.17451262e-06	(M)
+	Line search with alpha = 1.000 : res = 1.10670623e-07
+Newton iter.  2:          nonlinear residual = 1.10670623e-07	(M)
+	Line search with alpha = 1.000 : res = 5.61792089e-09
+Newton iter.  3:          nonlinear residual = 5.61792089e-09	(M)
+	Line search with alpha = 1.000 : res = 3.19293961e-10
+Newton iter.  4:          nonlinear residual = 3.19293961e-10	(M)
+	Line search with alpha = 1.000 : res = 1.76254427e-11
+Newton iter.  5:          nonlinear residual = 1.76254427e-11	(M)
+	Line search with alpha = 1.000 : res = 9.87070593e-13
+Stopping because residual is below prescribed tolerance (1.00e-11)
+chns_conservation at t=5.00e-03: energy=2.41e+00, stabilization power=1.34e-04
+chns_energy at t=5.00e-03: energy=2.41e+00, stabilization power=1.34e-04
+chns_phase_energy at t=5.00e-03: energy=2.41e+00, stabilization power=1.34e-04
+chns_stabilization_energy at t=5.00e-03: energy=2.41e+00, stabilization power=1.34e-04
+
+Time step 6 - Advancing to t = 6.00e-03.
+Newton iter.  0:          nonlinear residual = 2.45922659e-02
+	Line search with alpha = 1.000 : res = 1.50319197e-06
+Newton iter.  1:          nonlinear residual = 1.50319197e-06	(M)
+	Line search with alpha = 1.000 : res = 6.58891814e-08
+Newton iter.  2:          nonlinear residual = 6.58891814e-08	(M)
+	Line search with alpha = 1.000 : res = 2.48162635e-09
+Newton iter.  3:          nonlinear residual = 2.48162635e-09	(M)
+	Line search with alpha = 1.000 : res = 1.07807657e-10
+Newton iter.  4:          nonlinear residual = 1.07807657e-10	(M)
+	Line search with alpha = 1.000 : res = 4.46534821e-12
+Stopping because residual is below prescribed tolerance (1.00e-11)
+chns_conservation at t=6.00e-03: energy=2.41e+00, stabilization power=1.37e-04
+chns_energy at t=6.00e-03: energy=2.41e+00, stabilization power=1.37e-04
+chns_phase_energy at t=6.00e-03: energy=2.41e+00, stabilization power=1.37e-04
+chns_stabilization_energy at t=6.00e-03: energy=2.41e+00, stabilization power=1.37e-04

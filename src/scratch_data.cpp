@@ -427,6 +427,13 @@ namespace NavierStokesScratch
     mobility_function     = CahnHilliard::get_mobility_evaluation_function(ch);
     body_force            = pp.body_force;
     tracer_limiter        = CahnHilliard::get_limiter_function(ch);
+    limited_mixture =
+      ch.with_tracer_limiter || ch.enable_energy_consistent_formulation;
+    positive_density_extension    = ch.enable_energy_consistent_formulation;
+    conservative_tracer_transport = ch.enable_energy_consistent_formulation;
+    skew_symmetric_momentum       = ch.enable_energy_consistent_formulation;
+    if (positive_density_extension)
+      tracer_limiter = &CahnHilliard::tracer_limiter;
     if constexpr (enable_enlarged)
     {
       const double length      = ch.psi_interface_width_factor * epsilon;
@@ -652,8 +659,22 @@ namespace NavierStokesScratch
     {
       density.resize(n_q_points);
       derivative_density_wrt_tracer.resize(n_q_points);
+      inertial_density.resize(n_q_points);
       dynamic_viscosity.resize(n_q_points);
       derivative_dynamic_viscosity_wrt_tracer.resize(n_q_points);
+      if (skew_symmetric_momentum)
+      {
+        energy_time.resize(n_q_points);
+      }
+      if constexpr (enable_pseudo_solid)
+        if (conservative_tracer_transport || skew_symmetric_momentum)
+        {
+          present_mesh_velocity_gradients.resize(n_q_points);
+          present_position_gradients_moving.resize(n_q_points);
+          previous_position_gradients_moving.resize(
+            time_handler.n_previous_solutions,
+            std::vector<Tensor<2, dim>>(n_q_points));
+        }
 
       tracer_values.resize(n_q_points);
       tracer_time_derivatives.resize(n_q_points);
@@ -672,10 +693,10 @@ namespace NavierStokesScratch
         profile_nodal_inverse.resize(max_dofs_per_cell);
         reconstructed_profile.resize(n_q_points);
         profile_correction_flux.resize(n_q_points);
-        if (enable_tracer_stabilization)
+        if (needs_phase_diffusion())
           profile_correction_divergence.resize(n_q_points);
       }
-      if (enable_tracer_stabilization &&
+      if (needs_phase_diffusion() &&
           (gradient_dependent_mobility ||
            param.cahn_hilliard.enable_profile_correction))
       {
@@ -687,7 +708,7 @@ namespace NavierStokesScratch
       if (variable_mobility)
       {
         mobility_evaluation.resize(n_q_points);
-        if (enable_tracer_stabilization)
+        if (needs_phase_diffusion())
         {
           mobility_gradient.resize(n_q_points);
           if (adaptive_mobility)
@@ -707,7 +728,7 @@ namespace NavierStokesScratch
       laplacian_shape_mu.resize(n_q_points,
                                 std::vector<double>(max_dofs_per_cell));
 
-      if (enable_tracer_stabilization)
+      if (needs_phase_diffusion())
       {
         potential_laplacians.resize(n_q_points);
         tau_supg_tracer.resize(n_q_points);

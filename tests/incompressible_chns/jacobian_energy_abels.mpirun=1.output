@@ -1,0 +1,27 @@
+Number of MPI processes: 1
+Convergence test with manufactured solution:
+Mesh file was changed to 0.msh
+Mesh info:
+ dimension: 2
+ no. of cells: 8
+ boundary indicators: 0(2 faces) 1(2 faces) 2(2 faces) 3(2 faces)
+ID 0 -> x_min
+ID 1 -> x_max
+ID 2 -> y_min
+ID 3 -> y_max
+Number of degrees of freedom: 109
+Max absolute error analytical vs fd matrix is 3.56556e-08
+Max absolute error analytical vs fd matrix is 3.60662e-08
+Max absolute error analytical vs fd matrix is 2.68118e-08
+
+L2_norm
+n_elm n_dof   dt        u            p           phi           mu
+    8   109 0.0400 6.9599e-03 - 8.8718e-02 - 7.2935e-03 - 1.0122e-01 -
+
+Linfty_norm
+n_elm n_dof   dt        u            p           phi           mu
+    8   109 0.0400 1.3733e-02 - 2.1517e-01 - 2.2626e-02 - 3.7255e-01 -
+
+H1_seminorm
+n_elm n_dof   dt        u            p           phi           mu
+    8   109 0.0400 7.9766e-02 - 3.4439e-01 - 1.1540e-01 - 1.2056e+00 -

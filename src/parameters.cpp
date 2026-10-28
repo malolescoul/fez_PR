@@ -198,11 +198,29 @@ namespace Parameters
         prm.leave_subsection();
         prm.enter_subsection("Local refinement");
         {
-          prm.declare_entry("refinement strategy",
-                            "fixed number",
-                            Patterns::Selection("fixed number|fixed fraction"),
-                            "Refinement strategy used by deal.II's "
-                            "refine_and_coarsen routines");
+          prm.declare_entry(
+            "refinement strategy",
+            "fixed number",
+            Patterns::Selection("fixed number|fixed fraction|interface band"),
+            "Refinement strategy: deal.II's fixed number or fixed fraction "
+            "of the Kelly indicator, or a graded band around the CHNS "
+            "interface reconstructed from the phase tracer.");
+          prm.declare_entry(
+            "interface band thresholds",
+            "0.9, 0.999",
+            Patterns::List(Patterns::Double(0., 1.)),
+            "Interface band strategy: increasing thresholds on |phi|. Cells "
+            "within the iso |phi| = threshold k target the level "
+            "max grid level - k, the other cells min grid level. The distance "
+            "to the interface is sqrt(2) eps atanh(phi), as in the profile "
+            "correction.");
+          prm.declare_entry(
+            "interface band margin",
+            "0",
+            Patterns::Double(0.),
+            "Interface band strategy: distance added to every threshold, in "
+            "units of the interface thickness, to anticipate the interface "
+            "motion between two adaptations.");
           prm.declare_entry(
             "variables for adaptation",
             "velocity",
@@ -313,6 +331,9 @@ namespace Parameters
           else if (parsed_strategy == "fixed fraction")
             t.refinement_strategy =
               Adaptation::TreeAMR::RefinementStrategy::FixedFraction;
+          else if (parsed_strategy == "interface band")
+            t.refinement_strategy =
+              Adaptation::TreeAMR::RefinementStrategy::InterfaceBand;
           else
             AssertThrow(false,
                         ExcMessage(
@@ -353,6 +374,18 @@ namespace Parameters
           t.n_prerefinement_steps =
             prm.get_integer("number of prerefinement steps");
           t.adapt_frequency = prm.get_integer("adapt frequency");
+          t.interface_band_thresholds.clear();
+          for (const auto &value : Utilities::split_string_list(
+                 prm.get("interface band thresholds"), ","))
+            t.interface_band_thresholds.push_back(std::stod(value));
+          AssertThrow(std::is_sorted(t.interface_band_thresholds.begin(),
+                                     t.interface_band_thresholds.end()) &&
+                        (t.interface_band_thresholds.empty() ||
+                         t.interface_band_thresholds.back() < 1.),
+                      ExcMessage(
+                        "The interface band thresholds must be increasing and "
+                        "strictly smaller than 1."));
+          t.interface_band_margin = prm.get_double("interface band margin");
         }
         prm.leave_subsection();
       }
@@ -586,6 +619,22 @@ namespace Parameters
         declare_postprocessing_file(prm);
       }
       prm.leave_subsection();
+      prm.enter_subsection("chns conservation");
+      declare_postprocessing_file(prm);
+      prm.set("output prefix", "chns_conservation");
+      prm.leave_subsection();
+      prm.enter_subsection("chns energy");
+      declare_postprocessing_file(prm);
+      prm.set("output prefix", "chns_energy");
+      prm.leave_subsection();
+      prm.enter_subsection("chns phase energy");
+      declare_postprocessing_file(prm);
+      prm.set("output prefix", "chns_phase_energy");
+      prm.leave_subsection();
+      prm.enter_subsection("chns stabilization energy");
+      declare_postprocessing_file(prm);
+      prm.set("output prefix", "chns_stabilization_energy");
+      prm.leave_subsection();
       prm.enter_subsection("vorticity");
       {
         declare_postprocessing_field(prm);
@@ -748,6 +797,18 @@ namespace Parameters
       {
         read_postprocessing_file(prm, chns_avg_velocity);
       }
+      prm.leave_subsection();
+      prm.enter_subsection("chns conservation");
+      read_postprocessing_file(prm, chns_conservation);
+      prm.leave_subsection();
+      prm.enter_subsection("chns energy");
+      read_postprocessing_file(prm, chns_energy);
+      prm.leave_subsection();
+      prm.enter_subsection("chns phase energy");
+      read_postprocessing_file(prm, chns_phase_energy);
+      prm.leave_subsection();
+      prm.enter_subsection("chns stabilization energy");
+      read_postprocessing_file(prm, chns_stabilization_energy);
       prm.leave_subsection();
       prm.enter_subsection("vorticity");
       {
@@ -1609,6 +1670,14 @@ namespace Parameters
                         "profile for transient "
                         "CHNS, CHNS-ALE and "
                         "enlarged CHNS-ALE.");
+      prm.declare_entry(
+        "enable energy consistent formulation",
+        "false",
+        Patterns::Bool(),
+        "Conservative phase and skew Abels momentum with BDF energy weighting. "
+        "Overrides enable tracer limiter: density is clamped for inertia only, "
+        "viscosity is clamped, and transport and gravity retain affine "
+        "density.");
       prm.declare_entry("profile correction strength",
                         "0.6",
                         Patterns::Double(0.),
@@ -1719,6 +1788,8 @@ namespace Parameters
       surface_tension     = prm.get_double("surface tension");
       epsilon_interface   = prm.get_double("interface thickness");
       with_tracer_limiter = prm.get_bool("enable tracer limiter");
+      enable_energy_consistent_formulation =
+        prm.get_bool("enable energy consistent formulation");
       enable_profile_correction = prm.get_bool("enable profile correction");
       profile_correction_strength =
         prm.get_double("profile correction strength");

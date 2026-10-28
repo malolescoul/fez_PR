@@ -1,0 +1,32 @@
+Number of MPI processes: 1
+Mesh info:
+ dimension: 3
+ no. of cells: 48
+ boundary indicators: 0(8 faces) 1(8 faces) 2(8 faces) 3(8 faces) 4(8 faces) 5(8 faces)
+ID 0 -> x_min
+ID 1 -> x_max
+ID 2 -> y_min
+ID 3 -> y_max
+ID 4 -> z_min
+ID 5 -> z_max
+Number of degrees of freedom: 564
+
+Time step 1 - Advancing to t = 0.01.
+Max absolute error analytical vs fd matrix is 5.44903e-08
+Newton iter.  0:          nonlinear residual = 4.38278080e+00
+	Line search with alpha = 1.000 : res = 7.53613097e-03
+Newton iter.  1:          nonlinear residual = 7.53613097e-03	(M)
+	Line search with alpha = 1.000 : res = 3.83562662e-06
+Newton iter.  2:          nonlinear residual = 3.83562662e-06	(M)
+	Line search with alpha = 1.000 : res = 2.32778863e-12
+Stopping because residual is below prescribed tolerance (1.00e-10)
+
+Time step 2 - Advancing to t = 2.00e-02.
+Max absolute error analytical vs fd matrix is 1.34e-07
+Newton iter.  0:          nonlinear residual = 8.47852838e-01
+	Line search with alpha = 1.000 : res = 1.73732992e-03
+Newton iter.  1:          nonlinear residual = 1.73732992e-03	(M)
+	Line search with alpha = 1.000 : res = 8.55853127e-09
+Newton iter.  2:          nonlinear residual = 8.55853127e-09	(M)
+	Line search with alpha = 1.000 : res = 1.45070081e-14
+Stopping because residual is below prescribed tolerance (1.00e-10)

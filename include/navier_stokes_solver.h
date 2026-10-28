@@ -444,6 +444,13 @@ public:
   void compute_error_estimate();
 
   /**
+   * For the interface band strategy, store in the cellwise criterion the
+   * target refinement level of each cell, from the distance to the CHNS
+   * interface reconstructed from the phase tracer.
+   */
+  void compute_interface_band_levels();
+
+  /**
    * Adapt the mesh (metric-based remeshing only for now).
    */
   virtual void adapt_mesh() override;

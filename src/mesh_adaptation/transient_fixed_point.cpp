@@ -8,6 +8,7 @@
 #include <deal.II/distributed/grid_refinement.h>
 #include <deal.II/distributed/tria.h>
 #include <deal.II/distributed/tria_base.h>
+#include <deal.II/grid/filtered_iterator.h>
 #include <deal.II/lac/affine_constraints.h>
 #include <deal.II/numerics/vector_tools.h>
 #include <deal.II/numerics/vector_tools_interpolate.h>
@@ -802,6 +803,19 @@ void TransientFixedPointData<dim>::adapt_mesh_with_dealii_routines(
         criteria,
         tree_amr.fraction_to_refine,
         tree_amr.fraction_to_coarsen);
+      break;
+    case Parameters::Mesh::Adaptation::TreeAMR::RefinementStrategy::
+      InterfaceBand:
+      // The criterion is the target level of each cell
+      for (const auto &cell : triangulation.active_cell_iterators() |
+                                IteratorFilters::LocallyOwnedCell())
+      {
+        const double target = criteria[cell->active_cell_index()];
+        if (cell->level() < target)
+          cell->set_refine_flag();
+        else if (cell->level() > target)
+          cell->set_coarsen_flag();
+      }
       break;
     default:
       DEAL_II_ASSERT_UNREACHABLE();

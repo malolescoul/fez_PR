@@ -2,6 +2,7 @@
 #define SCRATCH_DATA_H
 
 #include <cahn_hilliard.h>
+#include <chns_energy.h>
 #include <components_ordering.h>
 #include <deal.II/base/quadrature.h>
 #include <deal.II/fe/fe_simplex_p.h>
@@ -205,6 +206,10 @@ namespace NavierStokesScratch
      * Copy constructor
      */
     ScratchData(const ScratchData &other);
+
+    /** Values on the cell most recently passed to reinit(). */
+    const FEValues<dim> &get_current_fe_values() const
+    { return *active_fe_values; }
 
     /**
      * Control whether the stabilization parameters stay constant during reinit.
@@ -615,6 +620,29 @@ namespace NavierStokesScratch
             q, present_position_values[q], previous_position_values);
       }
 
+      if constexpr (enable_cahn_hilliard)
+        if (param.cahn_hilliard.enable_energy_consistent_formulation)
+        {
+          // Gradient on the current mesh of the BDF mesh velocity
+          fe_values_moving[position].get_function_gradients(
+            current_solution, present_position_gradients_moving);
+          for (unsigned int i = 0; i < previous_solutions.size(); ++i)
+            fe_values_moving[position].get_function_gradients(
+              previous_solutions[i], previous_position_gradients_moving[i]);
+          for (unsigned int q = 0; q < n_q_points; ++q)
+          {
+            Tensor<2, dim> grad_w;
+            if (!time_handler.is_steady())
+            {
+              const auto &c = time_handler.bdf_coefficients;
+              grad_w        = c[0] * present_position_gradients_moving[q];
+              for (unsigned int i = 1; i < c.size(); ++i)
+                grad_w += c[i] * previous_position_gradients_moving[i - 1][q];
+            }
+            present_mesh_velocity_gradients[q] = grad_w;
+          }
+        }
+
       const auto &fixed_quadrature_points =
         fe_values_fixed.get_quadrature_points();
 
@@ -622,31 +650,20 @@ namespace NavierStokesScratch
       source_terms.vector_value_list(fixed_quadrature_points,
                                      source_term_full_fixed);
 
+      // Source gradients are needed when position variations move quadrature
+      // points through a nonuniform MMS force. Keep the optional legacy path
+      // and enable them for the energy formulation's ALE MMS diagnostics.
 #if defined(WITH_GRADIENT_OF_SOURCE_TERMS)
-      /**
-       * The gradient of the source terms contributes to the Jacobian matrix
-       * when the mesh is moving. Currently, the solvers that need it implement
-       * this gradient using finite differences, which is quite slow.
-       * It is typically required for convergence studies with manufactured
-       * solutions, for which the source term is non uniform.
-       *
-       * For most other simulations, the source term is usually constant, so the
-       * computation of the gradient is disabled by default. The main
-       * consequence is that this slows down the convergence of the MMS tests.
-       *
-       * A solution would be to implement the analytic source term gradient for
-       * MMS (which requires adding a few exact derivatives functions to the
-       * MMSFunction class), and compute the symbolic gradient of the parsed
-       * source term.
-       */
-      source_terms.vector_gradient_list(
-        fe_values_moving.get_quadrature_points(), grad_source_term_full);
+      const bool full_source_gradient = true;
 #else
-      if constexpr (enable_enlarged)
-        if (param.mms_param.enable)
-          source_terms.vector_gradient_list(
-            fe_values_moving.get_quadrature_points(), grad_source_term_full);
+      const bool full_source_gradient =
+        enable_cahn_hilliard &&
+        param.cahn_hilliard.enable_energy_consistent_formulation &&
+        param.mms_param.enable;
 #endif
+      if (full_source_gradient || (enable_enlarged && param.mms_param.enable))
+        source_terms.vector_gradient_list(
+          fe_values_moving.get_quadrature_points(), grad_source_term_full);
       if constexpr (enable_enlarged)
         for (unsigned int q = 0; q < n_q_points; ++q)
           grad_source_psi[q] = grad_source_term_full[q][psi_lower];
@@ -675,24 +692,26 @@ namespace NavierStokesScratch
         for (int d = 0; d < dim; ++d)
           source_term_position[q][d] = source_term_full_fixed[q](x_lower + d);
 
-#if defined(WITH_GRADIENT_OF_SOURCE_TERMS)
-        // Fill the gradients of the source term
-        // Layout: grad_source_velocity[q] = df_i/dx_j
-        for (int di = 0; di < dim; ++di)
+        if (full_source_gradient)
         {
-          grad_source_pressure[q][di] = grad_source_term_full[q][p_lower][di];
-          for (int dj = 0; dj < dim; ++dj)
-            grad_source_velocity[q][di][dj] =
-              grad_source_term_full[q][u_lower + di][dj];
-
-          if constexpr (enable_cahn_hilliard)
+          // Fill the gradients of the source term
+          // Layout: grad_source_velocity[q] = df_i/dx_j
+          for (int di = 0; di < dim; ++di)
           {
-            grad_source_tracer[q][di] = grad_source_term_full[q][phi_lower][di];
-            grad_source_potential[q][di] =
-              grad_source_term_full[q][mu_lower][di];
+            grad_source_pressure[q][di] = grad_source_term_full[q][p_lower][di];
+            for (int dj = 0; dj < dim; ++dj)
+              grad_source_velocity[q][di][dj] =
+                grad_source_term_full[q][u_lower + di][dj];
+
+            if constexpr (enable_cahn_hilliard)
+            {
+              grad_source_tracer[q][di] =
+                grad_source_term_full[q][phi_lower][di];
+              grad_source_potential[q][di] =
+                grad_source_term_full[q][mu_lower][di];
+            }
           }
         }
-#endif
 
         for (unsigned int k = 0; k < dofs_per_cell; ++k)
         {
@@ -1119,7 +1138,7 @@ namespace NavierStokesScratch
         fe_values_moving[psi].get_function_gradients(current_solution,
                                                      psi_gradients);
       }
-      if (enable_tracer_stabilization)
+      if (needs_phase_diffusion())
       {
         fe_values_moving[potential].get_function_laplacians(
           current_solution, potential_laplacians);
@@ -1128,7 +1147,7 @@ namespace NavierStokesScratch
           fe_values_moving[potential].get_function_hessians(current_solution,
                                                             potential_hessians);
       }
-      if (gradient_dependent_mobility && enable_tracer_stabilization)
+      if (gradient_dependent_mobility && needs_phase_diffusion())
         fe_values_moving[tracer].get_function_hessians(current_solution,
                                                        tracer_hessians);
       // Previous solutions
@@ -1146,7 +1165,7 @@ namespace NavierStokesScratch
           grad_shape_phi[q][k] = fe_values_moving[tracer].gradient(k, q);
           if ((gradient_dependent_mobility ||
                param.cahn_hilliard.enable_profile_correction) &&
-              enable_tracer_stabilization)
+              needs_phase_diffusion())
             hessian_shape_phi[q][k] = fe_values_moving[tracer].hessian(k, q);
           shape_mu[q][k]      = fe_values_moving[potential].value(k, q);
           grad_shape_mu[q][k] = fe_values_moving[potential].gradient(k, q);
@@ -1155,7 +1174,7 @@ namespace NavierStokesScratch
             shape_psi[q][k]      = fe_values_moving[psi].value(k, q);
             grad_shape_psi[q][k] = fe_values_moving[psi].gradient(k, q);
           }
-          if (enable_tracer_stabilization)
+          if (needs_phase_diffusion())
             laplacian_shape_mu[q][k] =
               trace(fe_values_moving[potential].hessian(k, q));
 
@@ -1178,19 +1197,21 @@ namespace NavierStokesScratch
               const double nodal = profile_nodal_inverse[k].value;
               inverse_value += nodal * shape_phi[q][k];
               profile.inverse_gradient += nodal * grad_shape_phi[q][k];
-              if (enable_tracer_stabilization)
+              if (needs_phase_diffusion())
                 profile.inverse_hessian += nodal * hessian_shape_phi[q][k];
             }
           profile.value         = std::tanh(inverse_value);
-          const auto correction = CahnHilliard::evaluate_profile_correction(
-            profile.value,
-            profile.gradient(),
-            enable_tracer_stabilization ? profile.hessian() : Tensor<2, dim>(),
-            epsilon,
-            enable_tracer_stabilization);
+          const auto correction =
+            CahnHilliard::evaluate_profile_correction(profile.value,
+                                                      profile.gradient(),
+                                                      needs_phase_diffusion() ?
+                                                        profile.hessian() :
+                                                        Tensor<2, dim>(),
+                                                      epsilon,
+                                                      needs_phase_diffusion());
           profile_correction_flux[q] =
             profile_correction_coefficient * correction.flux;
-          if (enable_tracer_stabilization)
+          if (needs_phase_diffusion())
             profile_correction_divergence[q] =
               profile_correction_coefficient * correction.divergence;
         }
@@ -1200,21 +1221,53 @@ namespace NavierStokesScratch
           time_handler.compute_time_derivative_at_quadrature_node(
             q, tracer_values[q], previous_tracer_values);
 
-        // Physical properties based on tracer, filter if applicable
-        const double filtered_phi = tracer_limiter(tracer_values[q]);
-        density[q] =
+        // Physical properties based on tracer, filter if applicable. The
+        // derivatives vanish where the limiter is active.
+        const double phi_q        = tracer_values[q];
+        const double filtered_phi = tracer_limiter(phi_q);
+        const double dfiltered =
+          (limited_mixture && std::abs(phi_q) > 1. ? 0. : 1.);
+        const double drho_affine =
+          CahnHilliard::linear_mixing_derivative(phi_q, density0, density1);
+        inertial_density[q] =
           CahnHilliard::linear_mixing(filtered_phi, density0, density1);
+        if (positive_density_extension)
+        {
+          density[q] = CahnHilliard::linear_mixing(phi_q, density0, density1);
+          derivative_density_wrt_tracer[q] = drho_affine;
+        }
+        else
+        {
+          density[q]                       = inertial_density[q];
+          derivative_density_wrt_tracer[q] = dfiltered * drho_affine;
+        }
         dynamic_viscosity[q] = CahnHilliard::linear_mixing(filtered_phi,
                                                            dynamic_viscosity0,
                                                            dynamic_viscosity1);
-        derivative_density_wrt_tracer[q] =
-          CahnHilliard::linear_mixing_derivative(filtered_phi,
-                                                 density0,
-                                                 density1);
         derivative_dynamic_viscosity_wrt_tracer[q] =
-          CahnHilliard::linear_mixing_derivative(filtered_phi,
-                                                 dynamic_viscosity0,
-                                                 dynamic_viscosity1);
+          dfiltered * CahnHilliard::linear_mixing_derivative(
+                        filtered_phi, dynamic_viscosity0, dynamic_viscosity1);
+
+        if (skew_symmetric_momentum)
+        {
+          std::array<double, 2>         old_phi{};
+          std::array<Tensor<1, dim>, 2> old_u{};
+          for (unsigned int k = 0;
+               k < std::min<std::size_t>(2, previous_solutions.size());
+               ++k)
+          {
+            old_phi[k] = previous_tracer_values[k][q];
+            old_u[k]   = previous_velocity_values[k][q];
+          }
+          energy_time[q] =
+            CHNSEnergy::evaluate_time(phi_q,
+                                      present_velocity_values[q],
+                                      density0,
+                                      density1,
+                                      time_handler.bdf_coefficients,
+                                      old_phi,
+                                      old_u);
+        }
 
         source_term_tracer[q]    = source_term_full_moving[q](phi_lower);
         source_term_potential[q] = source_term_full_moving[q](mu_lower);
@@ -1230,7 +1283,7 @@ namespace NavierStokesScratch
                                                      present_velocity_values[q],
                                                      tracer_gradients[q],
                                                      mobility_scaling);
-          if (enable_tracer_stabilization)
+          if (needs_phase_diffusion())
           {
             const auto &evaluation = mobility_evaluation[q];
             mobility_gradient[q] =
@@ -1468,6 +1521,15 @@ namespace NavierStokesScratch
 
     bool enable_stabilization;
     bool enable_tracer_stabilization;
+
+    // The skew momentum residual also contains div(J), even without tracer
+    // SUPG.
+    bool needs_phase_diffusion() const
+    {
+      return enable_tracer_stabilization ||
+             (skew_symmetric_momentum && enable_stabilization);
+    }
+
 
   public:
     unsigned int active_fe_index;
@@ -1765,6 +1827,27 @@ namespace NavierStokesScratch
 
     std::vector<Tensor<1, dim>> diffusive_flux;
     std::vector<double>         tau_supg_tracer;
+
+    // Tracer transport in conservative form and skew-symmetric momentum.
+    bool conservative_tracer_transport = false;
+    bool skew_symmetric_momentum       = false;
+    // True if phi is clamped in the mixture evaluations, and true if the
+    // clamped density is only used to weight the momentum time derivative.
+    bool limited_mixture            = false;
+    bool positive_density_extension = false;
+
+    // Density weighting the momentum time derivative and its derivative
+    // w.r.t. the tracer. It differs from the density only with the positive
+    // extension.
+    std::vector<double> inertial_density;
+
+    std::vector<CHNSEnergy::TimeData<dim>> energy_time;
+
+    // Gradient of the mesh velocity on the current mesh, required by the
+    // conservative and skew-symmetric forms on moving meshes.
+    std::vector<Tensor<2, dim>>              present_mesh_velocity_gradients;
+    std::vector<Tensor<2, dim>>              present_position_gradients_moving;
+    std::vector<std::vector<Tensor<2, dim>>> previous_position_gradients_moving;
 
     std::vector<std::vector<double>>         shape_phi;
     std::vector<std::vector<Tensor<1, dim>>> grad_shape_phi;

@@ -1,6 +1,10 @@
 
+#include <boost/archive/binary_iarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
 #include <post_processing_handler.h>
 #include <postprocessors_and_evaluators.h>
+
+#include <filesystem>
 
 template <int dim>
 PostProcessingHandler<dim>::PostProcessingHandler(
@@ -499,6 +503,244 @@ void PostProcessingHandler<dim>::create_field_postprocessors(
     if (postprocessor_param_ptr->enable)
       field_postprocessors[type] = create_field_postprocessor(
         type, param, mapping, cell_quadrature, with_moving_mesh);
+}
+
+template <int dim>
+void PostProcessingHandler<dim>::process_chns_energy(
+  const CHNSEnergy::Integrals &data,
+  const TimeHandler           &time)
+{
+  using I       = CHNSEnergy::Integrals;
+  const auto &v = data.values;
+  if (chns_energy_last_iteration == time.current_time_iteration)
+    return;
+  const bool first = !chns_energy_initialized;
+  const bool power_available =
+    time.is_steady() ||
+    (time.current_time_iteration > 0 &&
+     time.current_time_iteration != time.time_iteration_at_last_restart);
+  const auto power = [&](double value) {
+    return power_available ? value : std::numeric_limits<double>::quiet_NaN();
+  };
+  if (first)
+  {
+    chns_energy_initialized    = true;
+    chns_energy_reference_time = chns_energy_last_time = time.current_time;
+    chns_initial_mass                                  = v[I::AffineMass];
+    chns_initial_phase                                 = v[I::Phase];
+    chns_initial_energy = chns_previous_energy = data.total_energy();
+  }
+  const double dt = time.current_time - chns_energy_last_time;
+  for (unsigned int k = 0; k < 3; ++k)
+    chns_stabilization_work[k] += dt * v[I::SUPGPower + k];
+  chns_energy_last_time      = time.current_time;
+  chns_energy_last_iteration = time.current_time_iteration;
+  const std::array<const Parameters::PostProcessing::PostProcessingFile *, 4>
+              parameters{{&post_proc_param.chns_conservation,
+                          &post_proc_param.chns_energy,
+                          &post_proc_param.chns_phase_energy,
+                          &post_proc_param.chns_stabilization_energy}};
+  std::string error;
+  if (mpi_rank == 0)
+    try
+    {
+      for (unsigned int k = 0; k < parameters.size(); ++k)
+      {
+        const auto &param = *parameters[k];
+        if (!param.enable)
+          continue;
+        auto      &table = chns_energy_tables[k];
+        const auto add   = [&](const std::string &name, double value) {
+          table.add_value(name, value);
+          table.set_precision(name, param.precision);
+          table.set_scientific(name, true);
+        };
+        add("time", time.current_time);
+        add("reference_time", chns_energy_reference_time);
+        table.add_value("iteration", time.current_time_iteration);
+        if (k == 0)
+        {
+          add("domain_volume", v[I::Volume]);
+          add("phase_integral", v[I::Phase]);
+          add("mass_affine", v[I::AffineMass]);
+          add("mass_positive", v[I::PositiveMass]);
+          add("phase_change_from_reference", v[I::Phase] - chns_initial_phase);
+          add("mass_change_from_reference",
+              v[I::AffineMass] - chns_initial_mass);
+          add("divergence_l2", std::sqrt(v[I::DivergenceSquared]));
+          add("phase_overshoot_volume", v[I::PhaseOvershootVolume]);
+          add("density_extension_l1", v[I::DensityExtensionL1]);
+        }
+        if (k == 1 || k == 2)
+        {
+          const std::array<std::string, 4> names{{"kinetic_energy",
+                                                  "bulk_energy",
+                                                  "gradient_energy",
+                                                  "gravitational_energy"}};
+          const unsigned int               count = k == 1 ? 1 : 2;
+          for (unsigned int phase = 0; phase < count; ++phase)
+          {
+            const unsigned int offset =
+              k == 1 ? static_cast<unsigned int>(I::Kinetic) :
+                       I::Phase0Kinetic + 4 * phase;
+            const std::string suffix =
+              k == 1 ? "" : "_phase_" + std::to_string(phase);
+            double total = 0.;
+            for (unsigned int e = 0; e < 4; ++e)
+            {
+              add(names[e] + suffix, v[offset + e]);
+              total += v[offset + e];
+            }
+            add("total_energy" + suffix, total);
+          }
+        }
+        if (k == 1)
+        {
+          add("energy_change_from_reference",
+              data.total_energy() - chns_initial_energy);
+          add("energy_step_change", data.total_energy() - chns_previous_energy);
+          add("viscous_dissipation", v[I::Viscous]);
+          add("diffusive_dissipation", v[I::Diffusive]);
+          add("profile_correction_power", v[I::CorrectionPower]);
+          add("body_force_power", v[I::BodyPower]);
+          add("source_power", power(v[I::SourcePower]));
+          add("temporal_power", power(v[I::TemporalPower]));
+          add("transport_power", power(v[I::TransportPower]));
+          add("stabilization_power", power(data.stabilization_power()));
+          // Volume identity for kinetic + free energy, before adding boundary
+          // work. The gravitational energy is reported separately above.
+          const double residual = v[I::TemporalPower] + v[I::TransportPower] +
+                                  v[I::Viscous] + v[I::Diffusive] +
+                                  v[I::CorrectionPower] + v[I::SourcePower] -
+                                  v[I::BodyPower] + data.stabilization_power();
+          add("volume_free_kinetic_power_residual", power(residual));
+        }
+        if (k == 3)
+        {
+          const std::array<std::string, 3> names{
+            {"momentum_supg", "pspg", "tracer_supg"}};
+          for (unsigned int j = 0; j < 3; ++j)
+          {
+            add(names[j] + "_power", power(v[I::SUPGPower + j]));
+            add(names[j] + "_work", chns_stabilization_work[j]);
+          }
+          add("total_power", power(data.stabilization_power()));
+          add("total_work",
+              chns_stabilization_work[0] + chns_stabilization_work[1] +
+                chns_stabilization_work[2]);
+        }
+        if (param.verbosity == Parameters::Verbosity::verbose)
+          std::cout << param.output_prefix << " at t=" << time.current_time
+                    << ": energy=" << data.total_energy()
+                    << ", stabilization power=" << data.stabilization_power()
+                    << std::endl;
+        if (should_output_postprocessing(time, param))
+        {
+          std::filesystem::create_directories(output_param.output_dir);
+          const auto filename =
+            output_param.output_dir + param.output_prefix + ".txt";
+          std::ofstream out(filename);
+          AssertThrow(out.good(), ExcMessage("Cannot write " + filename));
+          write_table(out, table, param);
+          AssertThrow(out.good(), ExcMessage("Failed to write " + filename));
+        }
+      }
+    }
+    catch (const std::exception &exception)
+    {
+      error = exception.what();
+    }
+  error = Utilities::MPI::broadcast(mpi_communicator, error, 0);
+  AssertThrow(error.empty(), ExcMessage(error));
+  chns_previous_energy = data.total_energy();
+}
+
+template <int dim>
+void PostProcessingHandler<dim>::save_chns_energy(
+  const std::string &prefix) const
+{
+  // Always replace the sidecar, including an inactive diagnostic state.
+  // Otherwise reusing a checkpoint prefix could retain an older reference.
+  std::string error;
+  if (mpi_rank == 0)
+    try
+    {
+      std::ofstream file(prefix + ".chns_energy", std::ios::binary);
+      AssertThrow(file.good(),
+                  ExcMessage("Cannot write CHNS energy checkpoint"));
+      file << "FEZ_ABELS_ENERGY_V1\n";
+      boost::archive::binary_oarchive archive(file);
+      archive << chns_energy_initialized << chns_energy_last_iteration
+              << chns_energy_reference_time << chns_energy_last_time
+              << chns_initial_mass << chns_initial_phase << chns_initial_energy
+              << chns_previous_energy;
+      for (const auto work : chns_stabilization_work)
+        archive << work;
+      for (const auto &table : chns_energy_tables)
+        archive << table;
+    }
+    catch (const std::exception &exception)
+    {
+      error = exception.what();
+    }
+  error = Utilities::MPI::broadcast(mpi_communicator, error, 0);
+  AssertThrow(error.empty(), ExcMessage(error));
+}
+
+template <int dim>
+void PostProcessingHandler<dim>::load_chns_energy(const std::string &prefix)
+{
+  std::string error;
+  if (mpi_rank == 0)
+    try
+    {
+      std::ifstream file(prefix + ".chns_energy", std::ios::binary);
+      // Older checkpoints start a new, explicitly dated diagnostic reference.
+      if (file)
+      {
+        std::string version;
+        std::getline(file, version);
+        AssertThrow(version == "FEZ_ABELS_ENERGY_V1",
+                    ExcMessage("Unknown CHNS energy checkpoint format"));
+        boost::archive::binary_iarchive archive(file);
+        archive >> chns_energy_initialized >> chns_energy_last_iteration >>
+          chns_energy_reference_time >> chns_energy_last_time >>
+          chns_initial_mass >> chns_initial_phase >> chns_initial_energy >>
+          chns_previous_energy;
+        for (auto &work : chns_stabilization_work)
+          archive >> work;
+        for (auto &table : chns_energy_tables)
+          archive >> table;
+      }
+    }
+    catch (const std::exception &exception)
+    {
+      error = exception.what();
+    }
+  error = Utilities::MPI::broadcast(mpi_communicator, error, 0);
+  AssertThrow(error.empty(), ExcMessage(error));
+  chns_energy_initialized =
+    Utilities::MPI::broadcast(mpi_communicator, chns_energy_initialized, 0);
+  chns_energy_last_iteration =
+    Utilities::MPI::broadcast(mpi_communicator, chns_energy_last_iteration, 0);
+  std::vector<double> state = {chns_energy_reference_time,
+                               chns_energy_last_time,
+                               chns_initial_mass,
+                               chns_initial_phase,
+                               chns_initial_energy,
+                               chns_previous_energy,
+                               chns_stabilization_work[0],
+                               chns_stabilization_work[1],
+                               chns_stabilization_work[2]};
+  state = Utilities::MPI::broadcast(mpi_communicator, state, 0);
+  chns_energy_reference_time = state[0];
+  chns_energy_last_time      = state[1];
+  chns_initial_mass          = state[2];
+  chns_initial_phase         = state[3];
+  chns_initial_energy        = state[4];
+  chns_previous_energy       = state[5];
+  for (unsigned int k = 0; k < 3; ++k)
+    chns_stabilization_work[k] = state[6 + k];
 }
 
 template class PostProcessingHandler<2>;
