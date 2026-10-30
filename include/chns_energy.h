@@ -154,6 +154,11 @@ namespace CHNSEnergy
       Phase1Bulk,
       Phase1Gradient,
       Phase1Gravity,
+      BoundaryPhaseFlux,
+      BoundaryKineticPower,
+      BoundaryPhasePower,
+      BoundaryTractionPower,
+      BoundaryReactionPower,
       Count
     };
     std::array<double, Count> values{};

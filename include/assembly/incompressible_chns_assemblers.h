@@ -306,6 +306,27 @@ namespace Assembly
     public:
       const Table<2, DoFTools::Coupling> &coupling_table;
     };
+    /**
+     * Boundary transport for the energy formulation with phase no_flux.
+     * The total diffusive phase flux (including profile correction) has zero
+     * normal component. Only transport by u-w crosses these boundaries.
+     */
+    template <int dim, typename ScratchData, typename CopyData>
+    class EnergyBoundaryAssembler : public AssemblerBase<ScratchData, CopyData>
+    {
+    public:
+      EnergyBoundaryAssembler(const ParameterReader<dim> &param)
+        : param(param)
+      {}
+
+      void assemble_matrix(const ScratchData &scratch_data,
+                           CopyData &copy_data) const override;
+      void assemble_rhs(const ScratchData &scratch_data,
+                        CopyData &copy_data) const override;
+
+    private:
+      const ParameterReader<dim> &param;
+    };
   } // namespace IncompressibleCHNS
 } // namespace Assembly
 
@@ -390,7 +411,10 @@ namespace Assembly
       }
 
       // Assign the relevant boundary assemblers
-      // ...
+      if (param.cahn_hilliard.enable_energy_consistent_formulation)
+        assemblers.emplace_back(
+          std::make_unique<EnergyBoundaryAssembler<dim, ScratchData, CopyData>>(
+            param));
     }
   } // namespace IncompressibleCHNS
 } // namespace Assembly

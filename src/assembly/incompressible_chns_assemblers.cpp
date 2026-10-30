@@ -9,6 +9,93 @@ namespace Assembly
 {
   namespace IncompressibleCHNS
   {
+    template <int dim, typename ScratchData, typename CopyData>
+    void EnergyBoundaryAssembler<dim, ScratchData, CopyData>::assemble_rhs(
+      const ScratchData &sd, CopyData &copy_data) const
+    {
+      if (!copy_data.cell_is_at_boundary)
+        return;
+      auto &rhs = copy_data.local_rhs(sd.active_fe_index);
+      for (unsigned int f = 0; f < sd.n_faces; ++f)
+        if (sd.face_at_boundary[f] &&
+            param.cahn_hilliard_bc.at(sd.face_boundary_id[f]).type ==
+              BoundaryConditions::Type::no_flux)
+          for (unsigned int q = 0; q < sd.n_faces_q_points; ++q)
+          {
+            const auto &u = sd.present_face_velocity_values[f][q];
+            auto a = u;
+            if constexpr (ScratchData::enable_pseudo_solid)
+              a -= sd.present_face_mesh_velocity_values[f][q];
+            const double an = a * sd.face_normals_moving[f][q];
+            const double phi = sd.face_tracer_values[f][q];
+            const double rho =
+              CahnHilliard::linear_mixing(phi, sd.density0, sd.density1);
+            // Boundary terms left by integration by parts in the conservative
+            // phase transport and the half-conservative momentum transport.
+            for (unsigned int i = 0; i < sd.dofs_per_cell; ++i)
+              rhs(i) -= an *
+                        (phi * sd.shape_phi_face[f][q][i] +
+                         0.5 * rho * (u * sd.phi_u_face[f][q][i])) *
+                        sd.face_JxW_moving[f][q];
+          }
+    }
+
+    template <int dim, typename ScratchData, typename CopyData>
+    void EnergyBoundaryAssembler<dim, ScratchData, CopyData>::assemble_matrix(
+      const ScratchData &sd, CopyData &copy_data) const
+    {
+      if (!copy_data.cell_is_at_boundary)
+        return;
+      auto &matrix = copy_data.local_matrix(sd.active_fe_index);
+      const double beta = 0.5 * (sd.density0 - sd.density1);
+      for (unsigned int f = 0; f < sd.n_faces; ++f)
+        if (sd.face_at_boundary[f] &&
+            param.cahn_hilliard_bc.at(sd.face_boundary_id[f]).type ==
+              BoundaryConditions::Type::no_flux)
+          for (unsigned int q = 0; q < sd.n_faces_q_points; ++q)
+          {
+            const auto &u = sd.present_face_velocity_values[f][q];
+            const auto &n = sd.face_normals_moving[f][q];
+            auto a = u;
+            Tensor<2, dim> inverse_F;
+            if constexpr (ScratchData::enable_pseudo_solid)
+            {
+              a -= sd.present_face_mesh_velocity_values[f][q];
+              inverse_F = invert(sd.present_face_position_gradient[f][q]);
+            }
+            const double an = a * n;
+            const double phi = sd.face_tracer_values[f][q];
+            const double rho =
+              CahnHilliard::linear_mixing(phi, sd.density0, sd.density1);
+            for (unsigned int j = 0; j < sd.dofs_per_cell; ++j)
+            {
+              const auto &du = sd.phi_u_face[f][q][j];
+              const double dphi = sd.shape_phi_face[f][q][j];
+              double delta_flux_measure = du * n;
+              if constexpr (ScratchData::enable_pseudo_solid)
+              {
+                const auto G = sd.grad_phi_x_face[f][q][j] * inverse_F;
+                // Variation of n dS: (tr(G) n - G^T n) dS. This accounts for
+                // the normal and the area together, also on curved faces.
+                delta_flux_measure +=
+                  -sd.bdf_c0 * (sd.phi_x_face[f][q][j] * n) +
+                  a * (trace(G) * n - transpose(G) * n);
+              }
+              for (unsigned int i = 0; i < sd.dofs_per_cell; ++i)
+              {
+                const auto &v = sd.phi_u_face[f][q][i];
+                const double test_phi = sd.shape_phi_face[f][q][i];
+                matrix(i, j) +=
+                  ((phi * test_phi + 0.5 * rho * (u * v)) *
+                     delta_flux_measure +
+                   an * (dphi * test_phi +
+                         0.5 * beta * dphi * (u * v) +
+                         0.5 * rho * (du * v))) * sd.face_JxW_moving[f][q];
+              }
+            }
+          }
+    }
+
     template <int dim,
               typename ScratchData,
               typename CopyData,

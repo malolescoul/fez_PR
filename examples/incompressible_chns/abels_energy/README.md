@@ -20,11 +20,22 @@ for the equations and the differences from that implementation.
 ## Supported boundaries and time integration
 
 Use BDF1 or BDF2. BDF2 requires `bdf start method = BDF1` and a start-step
-ratio strictly between zero and one, as in the reference implementation. Physical boundaries must use fluid `no_slip` or `slip`, together
-with phase `no_flux`. For ALE, their mesh position must use `fixed`; the interior
-mesh may deform. Full `velocity_mms` / `dirichlet_mms` traces are also supported
-for manufactured solutions. Open boundaries and moving physical walls are
-rejected: their boundary flux contributions have not been implemented.
+ratio strictly between zero and one, as in the reference implementation.
+Physical boundaries may use fluid `no_slip`, `slip` or `input_function`, together
+with phase `no_flux`. The existing component masks on `input_function` remain
+active: unconstrained tangential components retain their natural condition.
+For ALE, mesh positions may use `fixed`, `no_flux` or `input_function`, including
+partial position constraints. Full `velocity_mms` / `dirichlet_mms` traces are
+also supported for manufactured solutions. Open traction and other phase
+boundary conditions remain unsupported.
+
+On phase `no_flux` faces, the total diffusive flux `K = M grad(mu) + C` has zero
+normal component, including the profile-correction flux `C`. With `a = u-w`,
+the additional weak boundary terms are `phi (a.n) q` for phase and
+`rho/2 (a.n) (u.v)` for momentum. They use the affine transport density and the
+actual BDF mesh velocity. Their Jacobian includes the variations of velocity,
+phase, mesh velocity, surface normal and surface measure. No change is made to
+prescribed motion functions or to their component constraints.
 
 For energy-identity checks, use the same degree for phase and potential and a
 stable velocity/pressure pair, e.g. P2/P1. Other discretizations do not inherit
@@ -77,6 +88,32 @@ transport/geometric power and stabilization; it is not a finite difference of
 the reported total energy and excludes boundary work. The gravitational energy
 is reported separately. MMS boundary data can do external work, so that volume
 residual need not vanish for MMS runs.
+
+For the energy formulation with phase `no_flux` on all boundaries, additional
+columns give the outward phase flux, kinetic and chemical-energy transport,
+and the work rate of imposed velocities. `boundary_reaction_power` contracts
+the uncondensed momentum residual with the inhomogeneous velocity lifting.
+Thus it includes the discrete reactions enforcing the existing constraints;
+it is a diagnostic, not an extra force in the equations. Homogeneous slip and
+hanging-node relations are removed from this lifting.
+`boundary_traction_power` is a separate estimate from the assembled stress
+`(2 eta D(u) - p I)n`; its discrete trace need not equal the constraint reaction
+on a coarse mesh or with stabilization.
+
+`free_kinetic_power_residual` adds the outward kinetic and phase transport to
+the volume residual and subtracts reaction power. It is an assembled power
+balance, not a claim of monotone physical energy on moving meshes. The surface
+columns and this complete balance are `nan` when their scope does not apply
+(e.g. full manufactured phase traces or the advective formulation). Boundary
+powers are instantaneous; the existing checkpoint sidecar preserves their
+saved table rows.
+
+Run the boundary Jacobian, pressure-work and MPI checks with:
+
+```bash
+python3 tests/incompressible_chns/validate_energy_boundaries.py \
+  --build build-release --ranks 24
+```
 
 Temporal/residual powers unavailable at the initial or restart snapshot are
 `nan`, not physical zeros. Reference values, tables and accumulated stabilization

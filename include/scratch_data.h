@@ -1462,6 +1462,20 @@ namespace NavierStokesScratch
                                       previous_solutions,
                                       source_terms,
                                       exact_solution);
+            if constexpr (enable_cahn_hilliard)
+              if (skew_symmetric_momentum)
+              {
+                (*active_fe_face_values)[tracer].get_function_values(
+                  current_solution, face_tracer_values[i_face]);
+                (*active_fe_face_values)[potential].get_function_values(
+                  current_solution, face_potential_values[i_face]);
+                (*active_fe_face_values)[pressure].get_function_values(
+                  current_solution, present_face_pressure_values[i_face]);
+                for (unsigned int q = 0; q < n_faces_q_points; ++q)
+                  for (unsigned int k = 0; k < dofs_per_cell; ++k)
+                    shape_phi_face[i_face][q][k] =
+                      (*active_fe_face_values)[tracer].value(k, q);
+              }
             if constexpr (enable_compressible)
               reinit_compressible_face(i_face,
                                        *active_fe_face_values,
@@ -1842,6 +1856,11 @@ namespace NavierStokesScratch
     std::vector<double> inertial_density;
 
     std::vector<CHNSEnergy::TimeData<dim>> energy_time;
+
+    // Phase traces used by the conservative boundary transport.
+    std::vector<std::vector<double>> face_tracer_values;
+    std::vector<std::vector<double>> face_potential_values;
+    std::vector<std::vector<std::vector<double>>> shape_phi_face;
 
     // Gradient of the mesh velocity on the current mesh, required by the
     // conservative and skew-symmetric forms on moving meshes.

@@ -620,9 +620,10 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::
   {
     using Type               = BoundaryConditions::Type;
     unsigned int unsupported = numbers::invalid_unsigned_int;
-    // The conservative volume forms omit open-boundary flux integrals.
-    // Accept impermeable stationary walls, or full manufactured traces whose
-    // test functions vanish. Check mesh faces too, including unspecified IDs.
+    // Phase no_flux closes the total diffusive flux, including the profile
+    // correction. Conservative transport is assembled on these faces even
+    // when the mesh moves or only some velocity components are prescribed.
+    // Open traction/phase conditions still require their own boundary model.
     for (const auto &cell : this->dof_handler->active_cell_iterators())
       if (cell->is_locally_owned())
         for (const auto &face : cell->face_iterators())
@@ -640,13 +641,16 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::
                 fluid->second.type == Type::velocity_mms &&
                 phase->second.type == Type::dirichlet_mms;
               bool wall = (fluid->second.type == Type::no_slip ||
-                           fluid->second.type == Type::slip) &&
+                           fluid->second.type == Type::slip ||
+                           fluid->second.type == Type::input_function) &&
                           phase->second.type == Type::no_flux;
               if constexpr (with_moving_mesh)
               {
                 const auto mesh = this->param.pseudosolid_bc.find(id);
                 wall = wall && mesh != this->param.pseudosolid_bc.end() &&
-                       mesh->second.type == Type::fixed;
+                       (mesh->second.type == Type::fixed ||
+                        mesh->second.type == Type::no_flux ||
+                        mesh->second.type == Type::input_function);
               }
               supported = manufactured || wall;
             }
@@ -659,10 +663,10 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::
       unsupported == numbers::invalid_unsigned_int,
       ExcMessage(
         "Unsupported boundary id " + std::to_string(unsupported) +
-        " for the energy-consistent formulation. Use no_slip/slip "
-        "with phase no_flux (and fixed boundary mesh position in ALE), "
-        "or manufactured velocity and phase traces. Open boundaries "
-        "and moving physical walls require boundary flux terms."));
+        " for the energy-consistent formulation. Use no_slip, slip or "
+        "input_function velocity with phase no_flux and fixed, no_flux or "
+        "input_function mesh position in ALE, or full manufactured traces. "
+        "Open traction and other phase boundary conditions are not supported."));
   }
   for (const auto &[id, bc] : this->param.cahn_hilliard_bc)
   {
@@ -1061,6 +1065,8 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::
     diagnostics.profile_correction_coefficient =
       compute_profile_correction_coefficient(false, true);
     CHNSEnergy::Integrals local, global;
+    CopyData reaction_data(*fe);
+    Vector<double> velocity_lifting(fe->n_dofs_per_cell());
     const bool transient = !this->time_handler.is_steady() &&
                            this->time_handler.current_time_iteration > 0 &&
                            this->time_handler.current_time_iteration !=
@@ -1098,10 +1104,62 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::
                                            transient ||
                                              this->time_handler.is_steady(),
                                            local);
+        if (this->param.cahn_hilliard.enable_energy_consistent_formulation &&
+            cell->at_boundary())
+          for (const auto f : cell->face_indices())
+            if (diagnostics.face_at_boundary[f] &&
+                this->param.cahn_hilliard_bc.at(
+                  diagnostics.face_boundary_id[f]).type ==
+                  BoundaryConditions::Type::no_flux)
+              CHNSEnergy::integrate_no_flux_boundary<dim>(diagnostics, f, local);
+
+        if (transient || this->time_handler.is_steady())
+        {
+          // A prescribed velocity does work through its constraint reaction.
+          // Remove the homogeneous constraint relations (including slip and
+          // hanging nodes) to retain only the imposed velocity lifting.
+          auto &indices = reaction_data.dof_indices();
+          cell->get_dof_indices(indices);
+          velocity_lifting = 0.;
+          for (unsigned int i = 0; i < diagnostics.dofs_per_cell; ++i)
+            if (this->ordering->is_velocity(diagnostics.components[i]) &&
+                this->zero_constraints.is_constrained(indices[i]))
+            {
+              double value = (*this->present_solution)[indices[i]];
+              for (const auto &[j, weight] :
+                   *this->zero_constraints.get_constraint_entries(indices[i]))
+                value -= weight * (*this->present_solution)[j];
+              velocity_lifting[i] = value;
+            }
+          if (velocity_lifting.linfty_norm() > 0.)
+          {
+            reaction_data.cell_is_at_boundary = cell->at_boundary();
+            reaction_data.local_rhs() = 0.;
+            for (const auto &assembler : assemblers)
+              assembler->assemble_rhs(diagnostics, reaction_data);
+            // rhs is minus the residual. This contraction precedes constraint
+            // elimination, so it includes the forces enforcing Dirichlet data.
+            local.values[CHNSEnergy::Integrals::BoundaryReactionPower] -=
+              reaction_data.local_rhs() * velocity_lifting;
+          }
+        }
       }
     Utilities::MPI::sum<double>(make_array_view(local.values),
                                 this->mpi_communicator,
                                 make_array_view(global.values));
+    // The boundary transport diagnostic currently covers phase no_flux only.
+    // Do not report a partial surface integral as a complete energy balance
+    // for manufactured Dirichlet traces or for the advective formulation.
+    bool boundary_power_available =
+      this->param.cahn_hilliard.enable_energy_consistent_formulation;
+    for (const auto &[id, bc] : this->param.cahn_hilliard_bc)
+      boundary_power_available &= bc.type == BoundaryConditions::Type::no_flux;
+    if (!boundary_power_available)
+      for (const auto index : {CHNSEnergy::Integrals::BoundaryPhaseFlux,
+                               CHNSEnergy::Integrals::BoundaryKineticPower,
+                               CHNSEnergy::Integrals::BoundaryPhasePower,
+                               CHNSEnergy::Integrals::BoundaryTractionPower})
+        global.values[index] = std::numeric_limits<double>::quiet_NaN();
     this->postproc_handler->process_chns_energy(global, this->time_handler);
   }
 

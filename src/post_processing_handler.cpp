@@ -570,6 +570,7 @@ void PostProcessingHandler<dim>::process_chns_energy(
           add("divergence_l2", std::sqrt(v[I::DivergenceSquared]));
           add("phase_overshoot_volume", v[I::PhaseOvershootVolume]);
           add("density_extension_l1", v[I::DensityExtensionL1]);
+          add("outward_boundary_phase_flux", power(v[I::BoundaryPhaseFlux]));
         }
         if (k == 1 || k == 2)
         {
@@ -614,6 +615,16 @@ void PostProcessingHandler<dim>::process_chns_energy(
                                   v[I::CorrectionPower] + v[I::SourcePower] -
                                   v[I::BodyPower] + data.stabilization_power();
           add("volume_free_kinetic_power_residual", power(residual));
+          add("outward_boundary_kinetic_power", power(v[I::BoundaryKineticPower]));
+          add("outward_boundary_phase_power", power(v[I::BoundaryPhasePower]));
+          add("boundary_traction_power", power(v[I::BoundaryTractionPower]));
+          add("boundary_reaction_power", power(v[I::BoundaryReactionPower]));
+          // Reactions give the discrete work of prescribed velocity components.
+          // Traction above is a separate stress-trace estimate, not an extra
+          // force. The balance is for kinetic + free energy, excluding gravity.
+          add("free_kinetic_power_residual",
+              power(residual + v[I::BoundaryKineticPower] +
+                    v[I::BoundaryPhasePower] - v[I::BoundaryReactionPower]));
         }
         if (k == 3)
         {

@@ -1,9 +1,44 @@
 #ifndef chns_energy_diagnostics_h
 #define chns_energy_diagnostics_h
+#include <cahn_hilliard.h>
 #include <chns_energy.h>
 
 namespace CHNSEnergy
 {
+  /**
+   * Outward transport powers on a phase no_flux boundary. The total diffusive
+   * phase flux is prescribed to be zero; its evaluated normal gradient must
+   * not be substituted for this natural boundary condition.
+   */
+  template <int dim, typename Scratch>
+  void integrate_no_flux_boundary(const Scratch &s, unsigned int f,
+                                   Integrals &data)
+  {
+    using I = Integrals;
+    for (unsigned int q = 0; q < s.n_faces_q_points; ++q)
+    {
+      const auto &u = s.present_face_velocity_values[f][q];
+      const auto &n = s.face_normals_moving[f][q];
+      auto a = u;
+      if constexpr (Scratch::enable_pseudo_solid)
+        a -= s.present_face_mesh_velocity_values[f][q];
+      const double phi = s.face_tracer_values[f][q];
+      const double rho = CahnHilliard::linear_mixing(phi, s.density0, s.density1);
+      const double eta = CahnHilliard::linear_mixing(
+        s.tracer_limiter(phi), s.dynamic_viscosity0, s.dynamic_viscosity1);
+      const double flux = (a * n) * s.face_JxW_moving[f][q];
+      data.values[I::BoundaryPhaseFlux] += phi * flux;
+      data.values[I::BoundaryKineticPower] += 0.5 * rho * u.norm_square() * flux;
+      data.values[I::BoundaryPhasePower] +=
+        phi * s.face_potential_values[f][q] * flux;
+      const auto traction =
+        2. * eta * (s.present_face_velocity_sym_gradients[f][q] * n) -
+        s.present_face_pressure_values[f][q] * n;
+      data.values[I::BoundaryTractionPower] +=
+        (traction * u) * s.face_JxW_moving[f][q];
+    }
+  }
+
   template <int dim, typename Scratch>
   void integrate_point(const Scratch                &s,
                        unsigned int                  q,

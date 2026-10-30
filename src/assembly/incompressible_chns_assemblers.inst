@@ -3,6 +3,19 @@ namespace Assembly
 {
   namespace IncompressibleCHNS
   {
+    template class EnergyBoundaryAssembler<2,
+      NavierStokesScratch::ScratchDataCHNS<2>, CopyDataBase<>>;
+    template class EnergyBoundaryAssembler<2,
+      NavierStokesScratch::ScratchDataCHNS<2 , true>, CopyDataBase<>>;
+    template class EnergyBoundaryAssembler<2,
+      NavierStokesScratch::ScratchDataCHNS<2, true, true>, CopyDataBase<>>;
+    template class EnergyBoundaryAssembler<3,
+      NavierStokesScratch::ScratchDataCHNS<3>, CopyDataBase<>>;
+    template class EnergyBoundaryAssembler<3,
+      NavierStokesScratch::ScratchDataCHNS<3 , true>, CopyDataBase<>>;
+    template class EnergyBoundaryAssembler<3,
+      NavierStokesScratch::ScratchDataCHNS<3, true, true>, CopyDataBase<>>;
+
     /**
      * Main volume assembler
      */

@@ -665,6 +665,12 @@ namespace NavierStokesScratch
       if (skew_symmetric_momentum)
       {
         energy_time.resize(n_q_points);
+        face_tracer_values.resize(n_faces, std::vector<double>(n_faces_q_points));
+        face_potential_values.resize(n_faces,
+                                     std::vector<double>(n_faces_q_points));
+        shape_phi_face.resize(
+          n_faces, std::vector<std::vector<double>>(
+                     n_faces_q_points, std::vector<double>(max_dofs_per_cell)));
       }
       if constexpr (enable_pseudo_solid)
         if (conservative_tracer_transport || skew_symmetric_momentum)
