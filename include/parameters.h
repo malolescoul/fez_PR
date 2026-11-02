@@ -838,6 +838,7 @@ namespace Parameters
     bool   with_tracer_limiter;
     bool   enable_energy_consistent_formulation = false;
     bool   enable_profile_correction   = false;
+    bool   enable_flux_correction               = false;
     double profile_correction_strength = 0.6;
 
     // Mesh forcing parameters control the source term in the pseudosolid

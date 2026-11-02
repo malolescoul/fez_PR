@@ -575,6 +575,8 @@ namespace Assembly
             sd.needs_phase_diffusion(),
             &correction);
 
+        const auto projection = sd.get_flux_projection(q);
+
         // Precompute quantities depending only on j
         for (unsigned int j = 0; j < sd.dofs_per_cell; ++j)
         {
@@ -591,6 +593,17 @@ namespace Assembly
                  evaluation.derivative_wrt_tracer_gradient * grad_phi_phi[j];
             mobility_variation[j] = dM;
           }
+          Tensor<1, dim> dgrad_M;
+          if (sd.variable_mobility && sd.needs_phase_diffusion())
+            dgrad_M =
+              sd.mobility_gradient_variation(q,
+                                             phi_phi[j],
+                                             phi_u_j,
+                                             grad_phi_u_j,
+                                             grad_phi_phi[j],
+                                             sd.gradient_dependent_mobility ?
+                                               sd.hessian_shape_phi[q][j] :
+                                               Tensor<2, dim>());
           CahnHilliard::ProfileCorrection<dim> dcorrection;
           if (!sd.profile_correction_flux.empty())
           {
@@ -608,6 +621,21 @@ namespace Assembly
                                                dprofile.hessian);
             dcorrection.flux *= sd.profile_correction_coefficient;
             dcorrection.divergence *= sd.profile_correction_coefficient;
+            if (!sd.flux_projection.empty())
+            {
+              const auto projected =
+                projection.variation(dprofile,
+                                     grad_phi_mu_j,
+                                     sd.needs_phase_diffusion() &&
+                                         this->ordering.is_potential(
+                                           sd.components[j]) ?
+                                       sd.potential_shape_hessian(q, j) :
+                                       Tensor<2, dim>(),
+                                     dM,
+                                     dgrad_M);
+              dcorrection.flux += projected.flux;
+              dcorrection.divergence += projected.divergence;
+            }
             correction_flux_variation[j] = dcorrection.flux;
           }
           if (additional_flux)
@@ -703,15 +731,6 @@ namespace Assembly
               dcorrection.divergence;
             if (sd.variable_mobility)
             {
-              const auto dgrad_M =
-                sd.mobility_gradient_variation(q,
-                                               phi_phi[j],
-                                               phi_u_j,
-                                               grad_phi_u_j,
-                                               grad_phi_phi[j],
-                                               sd.gradient_dependent_mobility ?
-                                                 sd.hessian_shape_phi[q][j] :
-                                                 Tensor<2, dim>());
               strong_residual_tracer_variation[j] -=
                 dM * sd.potential_laplacians[q] + dgrad_M * grad_mu +
                 sd.mobility_gradient[q] * grad_phi_mu_j;
@@ -770,6 +789,14 @@ namespace Assembly
                     for (unsigned int c = 0; c < dim; ++c)
                       dhess_phi_x[a][b] -= grad_phi[c] * K[c][a][b];
               }
+            Tensor<1, dim> dgrad_M_x;
+            if (sd.variable_mobility && sd.needs_phase_diffusion())
+              dgrad_M_x = sd.mobility_gradient_variation(q,
+                                                         0.,
+                                                         Tensor<1, dim>(),
+                                                         -grad_u_x_G_j,
+                                                         dgrad_phi_x,
+                                                         dhess_phi_x);
             CahnHilliard::ProfileCorrection<dim> dcorrection_x;
             if (!sd.profile_correction_flux.empty())
             {
@@ -791,6 +818,28 @@ namespace Assembly
                                                    dhess_profile);
               dcorrection_x.flux *= sd.profile_correction_coefficient;
               dcorrection_x.divergence *= sd.profile_correction_coefficient;
+              if (!sd.flux_projection.empty())
+              {
+                Tensor<2, dim> dhess_mu;
+                if (sd.needs_phase_diffusion())
+                {
+                  const auto &H = sd.potential_hessians[q];
+                  const auto &K = (*hessian_phi_x_moving)[j];
+                  dhess_mu      = -(transpose_G * H + H * G);
+                  for (unsigned int a = 0; a < dim; ++a)
+                    for (unsigned int b = 0; b < dim; ++b)
+                      for (unsigned int c = 0; c < dim; ++c)
+                        dhess_mu[a][b] -= grad_mu[c] * K[c][a][b];
+                }
+                const auto projected = projection.variation(
+                  {0., -transpose_G * grad_profile, dhess_profile},
+                  -(transpose_G * grad_mu),
+                  dhess_mu,
+                  dM_x,
+                  dgrad_M_x);
+                dcorrection_x.flux += projected.flux;
+                dcorrection_x.divergence += projected.divergence;
+              }
             }
 
             p_x_tr_G_j[j] = p * trG;
@@ -825,9 +874,9 @@ namespace Assembly
             Tensor<1, dim> weak_correction_x;
             if (!sd.profile_correction_flux.empty())
             {
-              weak_correction_x = dcorrection_x.flux +
-                                  trG * sd.profile_correction_flux[q] -
-                                  G * sd.profile_correction_flux[q];
+              const auto correction_flux = sd.get_correction_flux(q);
+              weak_correction_x = dcorrection_x.flux + trG * correction_flux -
+                                  G * correction_flux;
               to_mult_by_phi_u_i_moving_mesh[j] +=
                 sd.diffusive_flux_factor * (grad_u * weak_correction_x);
             }
@@ -952,7 +1001,7 @@ namespace Assembly
                 if (!sd.profile_correction_flux.empty())
                   ddiffusive_flux_dx +=
                     sd.diffusive_flux_factor *
-                    (dgrad_u_dx * sd.profile_correction_flux[q] +
+                    (dgrad_u_dx * sd.get_correction_flux(q) +
                      grad_u * dcorrection_x.flux);
                 const auto dcapillary_dx = phi * dgrad_mu_dx;
 
@@ -984,15 +1033,8 @@ namespace Assembly
                   dcorrection_x.divergence;
                 if (sd.variable_mobility)
                 {
-                  const auto dgrad_M =
-                    sd.mobility_gradient_variation(q,
-                                                   0.,
-                                                   Tensor<1, dim>(),
-                                                   dgrad_u_dx,
-                                                   dgrad_phi_dx,
-                                                   dhess_phi_x);
                   strong_residual_tracer_x_variation[j] -=
-                    dM_x * sd.potential_laplacians[q] + dgrad_M * grad_mu +
+                    dM_x * sd.potential_laplacians[q] + dgrad_M_x * grad_mu +
                     sd.mobility_gradient[q] * dgrad_mu_dx;
                 }
                 strong_residual_tracer_x_variation[j] +=

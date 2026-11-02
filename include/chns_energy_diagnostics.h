@@ -78,6 +78,11 @@ namespace CHNSEnergy
                       scalar_product(s.present_velocity_sym_gradients[q],
                                      s.present_velocity_sym_gradients[q]);
     v[I::Diffusive] = s.get_mobility(q) * gm.norm_square();
+    if (!s.flux_projection.empty())
+    {
+      v[I::FluxProjectionPower] = s.flux_projection[q] * gm;
+      v[I::Diffusive] += v[I::FluxProjectionPower];
+    }
     if (!s.profile_correction_flux.empty())
       v[I::CorrectionPower] = s.profile_correction_flux[q] * gm;
     v[I::BodyPower] = rho * (s.body_force * u);

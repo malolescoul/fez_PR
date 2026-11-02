@@ -18,12 +18,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build', type=Path, required=True)
     parser.add_argument('--ranks', type=int, default=1)
+    parser.add_argument('--flux-correction', action='store_true',
+                        help='Check profile + flux correction, including restart')
     args = parser.parse_args()
     build = args.build.resolve()
     root = Path(__file__).resolve().parents[2]
-    workspace = build / ('validate-abels-energy-mpi' + str(args.ranks))
+    workspace = build / ('validate-abels-energy' + ('-flux' if args.flux_correction else '') +
+                         '-mpi' + str(args.ranks))
     workspace.mkdir(exist_ok=True)
     base = (root / 'examples/incompressible_chns/abels_energy/closed_relaxation.prm').read_text()
+    if args.flux_correction:
+        base += ('\nsubsection Cahn Hilliard\n'
+                 ' set enable profile correction = true\n'
+                 ' set enable flux correction = true\nend\n')
     env = os.environ.copy()
     env.setdefault('OMP_NUM_THREADS', '1')
     env.setdefault('OPENBLAS_NUM_THREADS', '1')
@@ -53,8 +60,16 @@ def main():
             conservation = read_table(directory / 'chns_conservation.txt')
             assert len(energy) >= 3, 'The simulation did not advance'
             assert math.isnan(energy[0]['temporal_power'])
-            assert all(row['total_energy'] <= old['total_energy'] + 1.e-10
-                       for old, row in zip(energy, energy[1:])), name
+            if not args.flux_correction:
+                assert all(row['total_energy'] <= old['total_energy'] + 1.e-10
+                           for old, row in zip(energy, energy[1:])), name
+            else:
+                # Profile restoration has signed power; check the actual
+                # balance below, rather than imposing energy monotonicity.
+                assert min(row['flux_projection_power'] for row in energy) < -1.e-8, name
+                assert all(row['flux_projection_power'] <= 1.e-12 and
+                           row['diffusive_dissipation'] >= -1.e-12
+                           for row in energy), name
             assert max(abs(row['volume_free_kinetic_power_residual'])
                        for row in energy[1:]) < 1.e-8, name
             assert max(abs(row['phase_change_from_reference'])
@@ -78,7 +93,8 @@ def main():
         'set enable checkpoint = true\n set restart = true'))
     restarted = read_table(directory / 'chns_energy.txt')
     assert len(restarted) == len(reference)
-    for key in ['reference_time', 'total_energy', 'energy_change_from_reference']:
+    for key in ['reference_time', 'total_energy', 'energy_change_from_reference',
+                'flux_projection_power', 'profile_correction_power', 'diffusive_dissipation']:
         assert abs(restarted[-1][key] - reference[-1][key]) < 1.e-10, key
     print('Checkpoint continuation passed')
 

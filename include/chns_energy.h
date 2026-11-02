@@ -159,6 +159,7 @@ namespace CHNSEnergy
       BoundaryPhasePower,
       BoundaryTractionPower,
       BoundaryReactionPower,
+      FluxProjectionPower,
       Count
     };
     std::array<double, Count> values{};

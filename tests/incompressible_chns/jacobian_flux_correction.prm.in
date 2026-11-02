@@ -1,0 +1,13 @@
+# Reuse the moving/partial boundary case with a reconstructed interface.
+# Check phase, momentum, stabilization and geometry derivatives together.
+include @SOURCE_DIR@/../incompressible_chns_ale_enlarged/energy_boundary_flux.prm
+
+subsection Cahn Hilliard
+  set enable flux correction = true
+end
+
+subsection Initial conditions
+  subsection cahn hilliard tracer
+    set Function expression = tanh((y-0.5-0.02*sin(pi*x))/(sqrt(2.)*0.3))
+  end
+end

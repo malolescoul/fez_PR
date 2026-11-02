@@ -3,6 +3,7 @@
 
 #include <cahn_hilliard.h>
 #include <chns_energy.h>
+#include <chns_flux_correction.h>
 #include <components_ordering.h>
 #include <deal.II/base/quadrature.h>
 #include <deal.II/fe/fe_simplex_p.h>
@@ -1057,8 +1058,41 @@ namespace NavierStokesScratch
     {
       auto flux = get_mobility(q) * potential_gradients[q];
       if (param.cahn_hilliard.enable_profile_correction)
-        flux += profile_correction_flux[q];
+        flux += get_correction_flux(q);
       return flux;
+    }
+
+    Tensor<1, dim> get_correction_flux(const unsigned int q) const
+    {
+      auto flux = profile_correction_flux[q];
+      if (param.cahn_hilliard.enable_flux_correction)
+        flux += flux_projection[q];
+      return flux;
+    }
+
+    Tensor<2, dim> potential_shape_hessian(const unsigned int q,
+                                           const unsigned int j) const
+    {
+      return (*active_fe_values)[potential].hessian(j, q);
+    }
+
+    CahnHilliard::FluxProjection<dim>
+    get_flux_projection(const unsigned int q) const
+    {
+      if (!param.cahn_hilliard.enable_flux_correction)
+        return {};
+      const bool  strong  = needs_phase_diffusion();
+      const auto &profile = reconstructed_profile[q];
+      return {profile.value,
+              profile.gradient(),
+              strong ? profile.hessian() : Tensor<2, dim>(),
+              potential_gradients[q],
+              strong ? potential_hessians[q] : Tensor<2, dim>(),
+              get_mobility(q),
+              strong && variable_mobility ? mobility_gradient[q] :
+                                            Tensor<1, dim>(),
+              epsilon,
+              strong};
     }
 
     double get_phase_diffusion(const unsigned int q) const
@@ -1069,6 +1103,9 @@ namespace NavierStokesScratch
                 0.) +
              (param.cahn_hilliard.enable_profile_correction ?
                 profile_correction_divergence[q] :
+                0.) +
+             (param.cahn_hilliard.enable_flux_correction ?
+                flux_projection_divergence[q] :
                 0.);
     }
 
@@ -1142,8 +1179,8 @@ namespace NavierStokesScratch
       {
         fe_values_moving[potential].get_function_laplacians(
           current_solution, potential_laplacians);
-        if constexpr (enable_pseudo_solid)
-          // Mesh-position variations of the Laplacian need the full Hessian.
+        if (enable_pseudo_solid || param.cahn_hilliard.enable_flux_correction)
+          // The projected divergence and mesh variations need the full Hessian.
           fe_values_moving[potential].get_function_hessians(current_solution,
                                                             potential_hessians);
       }
@@ -1304,6 +1341,13 @@ namespace NavierStokesScratch
                   evaluation.derivative_wrt_tracer_gradient;
             }
           }
+        }
+        if (param.cahn_hilliard.enable_flux_correction)
+        {
+          const auto projection = get_flux_projection(q);
+          flux_projection[q]    = projection.flux;
+          if (needs_phase_diffusion())
+            flux_projection_divergence[q] = projection.divergence;
         }
         const double current_mobility = get_mobility(q);
         diffusive_flux[q]             = diffusive_flux_factor *
@@ -1837,7 +1881,7 @@ namespace NavierStokesScratch
     std::vector<double>         potential_values;
     std::vector<Tensor<1, dim>> potential_gradients;
     std::vector<double>         potential_laplacians;
-    // Only used for the moving-mesh x-variation of the tracer SUPG residual.
+    // Needed for mesh variations and for the projected flux divergence.
     std::vector<Tensor<2, dim>> potential_hessians;
 
     // Global amplitude from the current Newton state; frozen in local
@@ -1848,6 +1892,8 @@ namespace NavierStokesScratch
     std::vector<CahnHilliard::ReconstructedProfile<dim>> reconstructed_profile;
     std::vector<Tensor<1, dim>> profile_correction_flux;
     std::vector<double>         profile_correction_divergence;
+    std::vector<Tensor<1, dim>> flux_projection;
+    std::vector<double>         flux_projection_divergence;
 
     std::vector<Tensor<1, dim>> diffusive_flux;
     std::vector<double>         tau_supg_tracer;

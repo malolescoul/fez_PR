@@ -1,0 +1,42 @@
+Number of MPI processes: 1
+Mesh info:
+ dimension: 2
+ no. of cells: 8
+ boundary indicators: 0(2 faces) 1(2 faces) 2(2 faces) 3(2 faces)
+ID 0 -> x_min
+ID 1 -> x_max
+ID 2 -> y_min
+ID 3 -> y_max
+Number of degrees of freedom: 159
+chns_conservation at t=0: energy=6.20212, stabilization power=0
+chns_energy at t=0: energy=6.20212, stabilization power=0
+Max absolute error analytical vs fd matrix is 3.00288e-06
+Newton iter.  0:          nonlinear residual = 2.68442220e+00
+	Line search with alpha = 1.000 : res = 8.77147123e-04
+Newton iter.  1:          nonlinear residual = 8.77147123e-04	(M)
+	Line search with alpha = 1.000 : res = 8.25212404e-09
+Newton iter.  2:          nonlinear residual = 8.25212404e-09	(M)
+	Line search with alpha = 1.000 : res = 4.29698257e-14
+Stopping because residual is below prescribed tolerance (1.00e-09)
+chns_conservation at t=1.00e-03: energy=6.20e+00, stabilization power=-3.58e-03
+chns_energy at t=1.00e-03: energy=6.20e+00, stabilization power=-3.58e-03
+Max absolute error analytical vs fd matrix is 1.86e-06
+Newton iter.  0:          nonlinear residual = 6.66947408e+00
+	Line search with alpha = 1.000 : res = 7.16239340e-03
+Newton iter.  1:          nonlinear residual = 7.16239340e-03	(M)
+	Line search with alpha = 1.000 : res = 6.89920857e-07
+Newton iter.  2:          nonlinear residual = 6.89920857e-07	(M)
+	Line search with alpha = 1.000 : res = 3.15382849e-11
+Stopping because residual is below prescribed tolerance (1.00e-09)
+chns_conservation at t=1.00e-02: energy=6.20e+00, stabilization power=9.19e-02
+chns_energy at t=1.00e-02: energy=6.20e+00, stabilization power=9.19e-02
+Max absolute error analytical vs fd matrix is 4.76e-07
+Newton iter.  0:          nonlinear residual = 2.58212438e+00
+	Line search with alpha = 1.000 : res = 3.25067024e-03
+Newton iter.  1:          nonlinear residual = 3.25067024e-03	(M)
+	Line search with alpha = 1.000 : res = 6.71355724e-07
+Newton iter.  2:          nonlinear residual = 6.71355724e-07	(M)
+	Line search with alpha = 1.000 : res = 1.18913874e-10
+Stopping because residual is below prescribed tolerance (1.00e-09)
+chns_conservation at t=2.00e-02: energy=6.20e+00, stabilization power=1.84e-02
+chns_energy at t=2.00e-02: energy=6.20e+00, stabilization power=1.84e-02

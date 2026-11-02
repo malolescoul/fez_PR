@@ -1,0 +1,18 @@
+# Run from this directory. This closed relaxation case has a chemical flux
+# with a nonzero component along the reconstructed interface normal.
+include closed_relaxation.prm
+
+subsection Cahn Hilliard
+  set enable profile correction = true
+  # false: profile restoration alone; true: also remove normal chemical flux.
+  set enable flux correction = true
+  set profile correction strength = 0.6
+end
+
+subsection Output
+  set output directory = ./closed_flux_correction/
+end
+
+# diffusive_dissipation includes the projection. flux_projection_power is
+# its (non-positive) difference from M*|grad(mu)|^2, not an additional power.
+# Profile restoration can supply or remove energy; inspect the power balance.

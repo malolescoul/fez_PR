@@ -1,0 +1,17 @@
+# Reuse the reconstructed-profile case with chemical-flux projection.
+# Both stabilizations and the energy-consistent transport are active.
+include @SOURCE_DIR@/mms_profile_correction_spacetime.prm
+
+subsection Cahn Hilliard
+  set enable flux correction = true
+  set enable energy consistent formulation = true
+end
+
+# A curved tanh interface keeps its normal defined throughout the domain.
+# The exact source uses continuum fields; nodal reconstruction still has
+# spatial error, measured together with the BDF2 time error.
+subsection Exact solution
+  subsection exact cahn hilliard tracer
+    set Function expression = tanh((y-0.5-0.02*sin(pi*x)*(1+0.1*sin(2*t)))/(sqrt(2.)*0.3))
+  end
+end

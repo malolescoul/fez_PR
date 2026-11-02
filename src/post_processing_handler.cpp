@@ -603,6 +603,8 @@ void PostProcessingHandler<dim>::process_chns_energy(
           add("viscous_dissipation", v[I::Viscous]);
           add("diffusive_dissipation", v[I::Diffusive]);
           add("profile_correction_power", v[I::CorrectionPower]);
+          // Already included in diffusive_dissipation, not an extra power.
+          add("flux_projection_power", v[I::FluxProjectionPower]);
           add("body_force_power", v[I::BodyPower]);
           add("source_power", power(v[I::SourcePower]));
           add("temporal_power", power(v[I::TemporalPower]));
@@ -722,6 +724,10 @@ void PostProcessingHandler<dim>::load_chns_energy(const std::string &prefix)
           archive >> work;
         for (auto &table : chns_energy_tables)
           archive >> table;
+        // Older tables have no projection column: the option did not exist,
+        // so its historical power is zero. Fill those rows when adding the
+        // first new value, after the current time has been appended.
+        chns_energy_tables[1].set_auto_fill_mode(true);
       }
     }
     catch (const std::exception &exception)
