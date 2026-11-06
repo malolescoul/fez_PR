@@ -5,6 +5,7 @@ import math
 import os
 from pathlib import Path
 import subprocess
+import xml.etree.ElementTree as ET
 
 
 def read_table(path):
@@ -27,6 +28,10 @@ def main():
                          '-mpi' + str(args.ranks))
     workspace.mkdir(exist_ok=True)
     base = (root / 'examples/incompressible_chns/abels_energy/closed_relaxation.prm').read_text()
+    base += ('\nsubsection Output\n set write vtu results = true\nend\n'
+             'subsection Postprocessing\n subsection surface tension force\n'
+             '  set enable = true\n  set write results = true\n'
+             '  set precision = 12\n end\nend\n')
     if args.flux_correction:
         base += ('\nsubsection Cahn Hilliard\n'
                  ' set enable profile correction = true\n'
@@ -55,9 +60,15 @@ def main():
                 text = text.replace('set enable tracer supg = false', 'set enable tracer supg = true')
             name = order + ('_stabilized' if stabilized else '_galerkin')
             directory = run(name, text)
-            energy = read_table(directory / 'chns_energy.txt')
-            phases = read_table(directory / 'chns_phase_energy.txt')
-            conservation = read_table(directory / 'chns_conservation.txt')
+            energy = read_table(directory / 'solution_chns_energy.txt')
+            phases = read_table(directory / 'solution_chns_phase_energy.txt')
+            conservation = read_table(directory / 'solution_chns_conservation.txt')
+            forces = read_table(directory / 'solution_surface_tension_force.txt')
+            assert len(forces) == len(energy), 'Missing force history'
+            assert all(row['integral_magnitude'] + 1.e-10 >= row['resultant_norm']
+                       for row in forces), 'Integral of magnitude must bound the resultant'
+            assert all('surface_tension_force' in path.read_text()
+                       for path in directory.glob('solution_*.pvtu'))
             assert len(energy) >= 3, 'The simulation did not advance'
             assert math.isnan(energy[0]['temporal_power'])
             if not args.flux_correction:
@@ -86,12 +97,22 @@ def main():
     checkpoint = ('\nsubsection Checkpoint Restart\n'
                   ' set enable checkpoint = true\n'
                   ' set checkpoint frequency = 1\nend\n')
-    run('restart', restart_text.replace('set t_end = 0.006', 'set t_end = 0.003')
-        + checkpoint)
+    directory = run('restart', restart_text.replace('set t_end = 0.006', 'set t_end = 0.003')
+                    + checkpoint)
+    def pvd_records():
+        return [(float(e.attrib['timestep']), e.attrib['file'])
+                for e in ET.parse(directory / 'solution.pvd').findall('.//DataSet')]
+    old_records = pvd_records()
     directory = run('restart', restart_text + checkpoint.replace(
         'set enable checkpoint = true',
         'set enable checkpoint = true\n set restart = true'))
-    restarted = read_table(directory / 'chns_energy.txt')
+    restarted = read_table(directory / 'solution_chns_energy.txt')
+    forces = read_table(directory / 'solution_surface_tension_force.txt')
+    assert len(forces) == len(restarted), 'Restart lost force TXT history'
+    records = pvd_records()
+    assert set(old_records).issubset(records), 'Restart lost old PVD entries'
+    assert len({name for _, name in records}) == len(records), 'Duplicate PVD entries'
+    assert all((directory / name).is_file() for _, name in records)
     assert len(restarted) == len(reference)
     for key in ['reference_time', 'total_energy', 'energy_change_from_reference',
                 'flux_projection_power', 'profile_correction_power', 'diffusive_dissipation']:

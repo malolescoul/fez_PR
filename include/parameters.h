@@ -836,6 +836,13 @@ namespace Parameters
     bool   mobility_tracer_limiter;
     std::shared_ptr<ManufacturedSolutions::ParsedFunctionSDBase<dim>>
            degenerate_mobility;
+    enum class SurfaceTensionRepresentation
+    {
+      korteweg,
+      laplace_beltrami
+    };
+    SurfaceTensionRepresentation surface_tension_representation =
+      SurfaceTensionRepresentation::korteweg;
     double surface_tension;
     double epsilon_interface;
     bool   with_tracer_limiter;

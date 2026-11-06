@@ -1658,6 +1658,11 @@ namespace Parameters
         degenerate_mobility->declare_parameters(prm, 1, "(1-x*x)*(1-x*x)");
       }
       prm.leave_subsection();
+      prm.declare_entry("surface tension representation",
+                        "korteweg",
+                        Patterns::Selection("korteweg|laplace beltrami"),
+                        "Capillary coupling: Korteweg or weak Laplace-Beltrami "
+                        "with the exact linear weight |grad(phi)|/2.");
       prm.declare_entry("surface tension",
                         "1.",
                         Patterns::Double(),
@@ -1674,7 +1679,8 @@ namespace Parameters
                         "false",
                         Patterns::Bool(),
                         "Implicit correction of the nodally reconstructed "
-                        "profile for transient "
+                        "profile with smooth extinction for |phi_r| between "
+                        "approximately 0.99950 and 0.99975, for transient "
                         "CHNS, CHNS-ALE and "
                         "enlarged CHNS-ALE.");
       prm.declare_entry(
@@ -1799,11 +1805,21 @@ namespace Parameters
         }
       }
       prm.leave_subsection();
+      surface_tension_representation =
+        prm.get("surface tension representation") == "laplace beltrami" ?
+          SurfaceTensionRepresentation::laplace_beltrami :
+          SurfaceTensionRepresentation::korteweg;
       surface_tension     = prm.get_double("surface tension");
       epsilon_interface   = prm.get_double("interface thickness");
       with_tracer_limiter = prm.get_bool("enable tracer limiter");
       enable_energy_consistent_formulation =
         prm.get_bool("enable energy consistent formulation");
+      AssertThrow(!enable_energy_consistent_formulation ||
+                    surface_tension_representation ==
+                      SurfaceTensionRepresentation::korteweg,
+                  ExcMessage("The energy consistent CHNS formulation requires "
+                             "korteweg surface tension; Laplace-Beltrami has a "
+                             "different surface energy."));
       enable_profile_correction = prm.get_bool("enable profile correction");
       enable_flux_correction    = prm.get_bool("enable flux correction");
       AssertThrow(!enable_flux_correction || enable_profile_correction,

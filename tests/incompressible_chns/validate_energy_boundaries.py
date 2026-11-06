@@ -70,7 +70,7 @@ def main():
     for suffix in ['', '_ale', '_ale_enlarged']:
         executable = 'incompressible_chns' + suffix
         directory = run(executable, executable, base)
-        rows = read_table(directory / 'chns_energy.txt')
+        rows = read_table(directory / 'solution_chns_energy.txt')
         assert len(rows) == 4, (executable, len(rows))  # initial + split startup + BDF2
         assert all(math.isfinite(row['free_kinetic_power_residual']) and
                    abs(row['free_kinetic_power_residual']) < 2.e-8 for row in rows[1:])
@@ -97,7 +97,7 @@ end''')
   end
 end\n'''
     directory = run('pressure_work', 'incompressible_chns', pressure)
-    for row in read_table(directory / 'chns_energy.txt')[1:]:
+    for row in read_table(directory / 'solution_chns_energy.txt')[1:]:
         assert abs(row['boundary_traction_power'] + 0.05) < 1.e-10
         assert abs(row['boundary_reaction_power'] + 0.05) < 1.e-10
         assert abs(row['free_kinetic_power_residual']) < 1.e-10

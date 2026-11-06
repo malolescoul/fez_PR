@@ -127,6 +127,7 @@ namespace Assembly
 
       auto &local_rhs = copy_data.local_rhs(sd.active_fe_index);
 
+      const double k                     = sd.laplace_beltrami ? 0. : 1.;
       const double sigma_tilde_over_eps  = sd.sigma_tilde / sd.epsilon;
       const double sigma_tilde_times_eps = sd.sigma_tilde * sd.epsilon;
       const auto  &body_force            = sd.body_force;
@@ -192,13 +193,14 @@ namespace Assembly
         if (sd.skew_symmetric_momentum)
         {
           mass_flux = rho * u_conv + sd.diffusive_flux_factor * phase_flux;
-          to_mult_by_phi_u_i =
-            sd.energy_time[q].inertia + 0.5 * (grad_u * mass_flux) +
-            0.5 * rho * div_w * u - rho * body_force + phi * grad_mu + source_u;
+          to_mult_by_phi_u_i = sd.energy_time[q].inertia +
+                               0.5 * (grad_u * mass_flux) +
+                               0.5 * rho * div_w * u - rho * body_force +
+                               k * phi * grad_mu + source_u;
         }
         else
           to_mult_by_phi_u_i = rho * (dudt + grad_u * u_conv - body_force) +
-                               diffusive_flux + phi * grad_mu + source_u;
+                               diffusive_flux + k * phi * grad_mu + source_u;
 
         // Tracer: advective form (u_conv . grad phi, psi), or conservative
         // form -(phi u_conv, grad psi) + (phi div(w), psi).
@@ -262,6 +264,11 @@ namespace Assembly
             local_rhs_i -=
               phi_u[i] * to_mult_by_phi_u_i - div_phi_u[i] * p +
               2. * eta * scalar_product(sym_grad_phi_u[i], sym_grad_u);
+            if (sd.laplace_beltrami)
+              local_rhs_i -=
+                scalar_product(CHNSSurfaceTension::stress(grad_phi,
+                                                          sd.surface_tension),
+                               grad_phi_u[i]);
             if (sd.skew_symmetric_momentum)
               local_rhs_i += 0.5 * u * (grad_phi_u[i] * mass_flux);
 
@@ -321,6 +328,7 @@ namespace Assembly
       auto &local_matrix = copy_data.local_matrix(sd.active_fe_index);
 
       const double bdf_c0                = sd.bdf_c0;
+      const double k                     = sd.laplace_beltrami ? 0. : 1.;
       const double sigma_tilde_over_eps  = sd.sigma_tilde / sd.epsilon;
       const double sigma_tilde_times_eps = sd.sigma_tilde * sd.epsilon;
       const auto  &body_force            = sd.body_force;
@@ -505,10 +513,10 @@ namespace Assembly
 
         // Precompute shape functions-independent terms
         const auto to_mult_by_phi_u_i_phi_phi_j =
-          (drhodphi * (dudt + u_dot_grad_u_ale - body_force) + grad_mu);
+          (drhodphi * (dudt + u_dot_grad_u_ale - body_force) + k * grad_mu);
 
         const auto momentum_partial_residual =
-          rho * (dudt - body_force + u_dot_grad_u_ale) + phi * grad_mu +
+          rho * (dudt - body_force + u_dot_grad_u_ale) + k * phi * grad_mu +
           source_u;
         const auto phi_partial_residual =
           conservative ? dphidt + phi * div_w + source_phi :
@@ -520,9 +528,10 @@ namespace Assembly
         if (skew)
         {
           mass_flux = rho * u_conv + sd.diffusive_flux_factor * phase_flux;
-          skew_partial_residual =
-            sd.energy_time[q].inertia + 0.5 * (grad_u * mass_flux) +
-            0.5 * rho * div_w * u - rho * body_force + phi * grad_mu + source_u;
+          skew_partial_residual = sd.energy_time[q].inertia +
+                                  0.5 * (grad_u * mass_flux) +
+                                  0.5 * rho * div_w * u - rho * body_force +
+                                  k * phi * grad_mu + source_u;
         }
         const auto mu_partial_residual =
           sd.skew_symmetric_momentum ?
@@ -566,14 +575,10 @@ namespace Assembly
 
         CahnHilliard::ProfileCorrectionLinearization<dim> correction;
         if (!sd.profile_correction_flux.empty())
-          CahnHilliard::evaluate_profile_correction(
-            sd.reconstructed_profile[q].value,
-            sd.reconstructed_profile[q].gradient(),
-            sd.needs_phase_diffusion() ? sd.reconstructed_profile[q].hessian() :
-                                         Tensor<2, dim>(),
-            sd.epsilon,
-            sd.needs_phase_diffusion(),
-            &correction);
+          CahnHilliard::evaluate_profile_correction(sd.reconstructed_profile[q],
+                                                    sd.epsilon,
+                                                    sd.needs_phase_diffusion(),
+                                                    &correction);
 
         const auto projection = sd.get_flux_projection(q);
 
@@ -609,20 +614,18 @@ namespace Assembly
           {
             const double inverse_derivative =
               sd.profile_nodal_inverse[j].derivative;
-            const auto dprofile = sd.reconstructed_profile[q].variation(
-              inverse_derivative * phi_phi[j],
-              inverse_derivative * grad_phi_phi[j],
-              sd.needs_phase_diffusion() ?
-                inverse_derivative * sd.hessian_shape_phi[q][j] :
-                Tensor<2, dim>(),
-              sd.needs_phase_diffusion());
-            dcorrection = correction.variation(dprofile.value,
-                                               dprofile.gradient,
-                                               dprofile.hessian);
+            const double ds = inverse_derivative * phi_phi[j];
+            const auto   dg = inverse_derivative * grad_phi_phi[j];
+            const auto   dh = sd.needs_phase_diffusion() ?
+                                inverse_derivative * sd.hessian_shape_phi[q][j] :
+                                Tensor<2, dim>();
+            dcorrection     = correction.variation(ds, dg, dh);
             dcorrection.flux *= sd.profile_correction_coefficient;
             dcorrection.divergence *= sd.profile_correction_coefficient;
             if (!sd.flux_projection.empty())
             {
+              const auto dprofile = sd.reconstructed_profile[q].variation(
+                ds, dg, dh, sd.needs_phase_diffusion());
               const auto projected =
                 projection.variation(dprofile,
                                      grad_phi_mu_j,
@@ -650,7 +653,7 @@ namespace Assembly
 
           to_mult_by_phi_u_i_potential[j] =
             diffusive_flux_factor * grad_u * grad_phi_mu_j +
-            phi * grad_phi_mu_j;
+            k * phi * grad_phi_mu_j;
 
           phi_u_j_x_grad_phi[j] = phi_u_j * grad_phi;
 
@@ -672,8 +675,8 @@ namespace Assembly
               sd.energy_time[q].inertia_phase_derivative * phi_phi[j] +
               0.5 * (grad_phi_u_j * mass_flux + grad_u * dm) +
               0.5 * div_w * (rho * phi_u_j + drhodphi * phi_phi[j] * u) -
-              drhodphi * phi_phi[j] * body_force + phi_phi[j] * grad_mu +
-              phi * grad_phi_mu_j;
+              drhodphi * phi_phi[j] * body_force + k * phi_phi[j] * grad_mu +
+              k * phi * grad_phi_mu_j;
           }
 
           if (conservative)
@@ -717,10 +720,17 @@ namespace Assembly
             // Variation w.r.t. potential
             strong_residual_momentum_variation[j] +=
               diffusive_flux_factor * grad_u * grad_phi_mu_j +
-              phi * grad_phi_mu_j;
+              k * phi * grad_phi_mu_j;
             if (additional_flux)
               strong_residual_momentum_variation[j] +=
                 additional_momentum_variation[j];
+            if (sd.laplace_beltrami)
+              strong_residual_momentum_variation[j] -=
+                CHNSSurfaceTension::force_variation(grad_phi,
+                                                    sd.tracer_hessians[q],
+                                                    grad_phi_phi[j],
+                                                    sd.hessian_shape_phi[q][j],
+                                                    sd.surface_tension);
           }
 
           if (sd.needs_phase_diffusion())
@@ -778,16 +788,17 @@ namespace Assembly
                 0.;
 
             Tensor<2, dim> dhess_phi_x;
-            if (sd.needs_phase_diffusion())
-              if (sd.gradient_dependent_mobility)
-              {
-                const auto &H = sd.tracer_hessians[q];
-                const auto &K = (*hessian_phi_x_moving)[j];
-                dhess_phi_x   = -(transpose_G * H + H * G);
-                for (unsigned int a = 0; a < dim; ++a)
-                  for (unsigned int b = 0; b < dim; ++b)
-                    for (unsigned int c = 0; c < dim; ++c)
-                      dhess_phi_x[a][b] -= grad_phi[c] * K[c][a][b];
+            if ((sd.needs_phase_diffusion() &&
+                 sd.gradient_dependent_mobility) ||
+                (sd.laplace_beltrami && sd.enable_stabilization))
+            {
+              const auto &H = sd.tracer_hessians[q];
+              const auto &K = (*hessian_phi_x_moving)[j];
+              dhess_phi_x   = -(transpose_G * H + H * G);
+              for (unsigned int a = 0; a < dim; ++a)
+                for (unsigned int b = 0; b < dim; ++b)
+                  for (unsigned int c = 0; c < dim; ++c)
+                    dhess_phi_x[a][b] -= grad_phi[c] * K[c][a][b];
               }
             Tensor<1, dim> dgrad_M_x;
             if (sd.variable_mobility && sd.needs_phase_diffusion())
@@ -800,22 +811,23 @@ namespace Assembly
             CahnHilliard::ProfileCorrection<dim> dcorrection_x;
             if (!sd.profile_correction_flux.empty())
             {
-              const auto    &profile      = sd.reconstructed_profile[q];
-              const auto     grad_profile = profile.gradient();
-              Tensor<2, dim> dhess_profile;
+              const auto    &profile = sd.reconstructed_profile[q];
+              Tensor<2, dim> dhess_inverse;
               if (sd.needs_phase_diffusion())
               {
-                const auto  H = profile.hessian();
+                const auto &H = profile.inverse_hessian;
                 const auto &K = (*hessian_phi_x_moving)[j];
-                dhess_profile = -(transpose_G * H + H * G);
+                dhess_inverse = -(transpose_G * H + H * G);
                 for (unsigned int a = 0; a < dim; ++a)
                   for (unsigned int b = 0; b < dim; ++b)
                     for (unsigned int c = 0; c < dim; ++c)
-                      dhess_profile[a][b] -= grad_profile[c] * K[c][a][b];
+                      dhess_inverse[a][b] -=
+                        profile.inverse_gradient[c] * K[c][a][b];
               }
-              dcorrection_x = correction.variation(0.,
-                                                   -transpose_G * grad_profile,
-                                                   dhess_profile);
+              dcorrection_x =
+                correction.variation(0.,
+                                     -transpose_G * profile.inverse_gradient,
+                                     dhess_inverse);
               dcorrection_x.flux *= sd.profile_correction_coefficient;
               dcorrection_x.divergence *= sd.profile_correction_coefficient;
               if (!sd.flux_projection.empty())
@@ -831,12 +843,17 @@ namespace Assembly
                       for (unsigned int c = 0; c < dim; ++c)
                         dhess_mu[a][b] -= grad_mu[c] * K[c][a][b];
                 }
-                const auto projected = projection.variation(
-                  {0., -transpose_G * grad_profile, dhess_profile},
-                  -(transpose_G * grad_mu),
-                  dhess_mu,
-                  dM_x,
-                  dgrad_M_x);
+                const auto dprofile =
+                  profile.variation(0.,
+                                    -transpose_G * profile.inverse_gradient,
+                                    dhess_inverse,
+                                    sd.needs_phase_diffusion());
+                const auto projected =
+                  projection.variation(dprofile,
+                                       -(transpose_G * grad_mu),
+                                       dhess_mu,
+                                       dM_x,
+                                       dgrad_M_x);
                 dcorrection_x.flux += projected.flux;
                 dcorrection_x.divergence += projected.divergence;
               }
@@ -868,7 +885,7 @@ namespace Assembly
             to_mult_by_phi_u_i_moving_mesh[j] =
               momentum_partial_residual * trG +
               rho * (grad_u * (-bdf_c0 * phi_x_j - G * u_conv)) -
-              phi * transpose_G * grad_mu +
+              k * phi * transpose_G * grad_mu +
               diffusive_flux_factor * grad_u * val * grad_mu +
               sd.diffusive_flux_factor * dM_x * (grad_u * grad_mu);
             Tensor<1, dim> weak_correction_x;
@@ -923,7 +940,7 @@ namespace Assembly
               skew_momentum_x_variation[j] =
                 skew_partial_residual * trG +
                 0.5 * (-(grad_u_x_G_j * mass_flux) + grad_u * dmass_flux_dx) +
-                0.5 * rho * ddiv_w_dx * u - phi * transpose_G * grad_mu;
+                0.5 * rho * ddiv_w_dx * u - k * phi * transpose_G * grad_mu;
               skew_momentum_x_variation[j] +=
                 (*grad_source_term_velocity) * phi_x_j;
               skew_mass_flux_x_variation[j] =
@@ -1003,7 +1020,14 @@ namespace Assembly
                     sd.diffusive_flux_factor *
                     (dgrad_u_dx * sd.get_correction_flux(q) +
                      grad_u * dcorrection_x.flux);
-                const auto dcapillary_dx = phi * dgrad_mu_dx;
+                auto dcapillary_dx = k * phi * dgrad_mu_dx;
+                if (sd.laplace_beltrami)
+                  dcapillary_dx -=
+                    CHNSSurfaceTension::force_variation(grad_phi,
+                                                        sd.tracer_hessians[q],
+                                                        dgrad_phi_dx,
+                                                        dhess_phi_x,
+                                                        sd.surface_tension);
 
                 strong_residual_momentum_x_variation[j] =
                   rho * (dgrad_u_dx * u_conv + grad_u * du_conv_dx) +
@@ -1148,6 +1172,12 @@ namespace Assembly
                      scalar_product(sym_grad_phi_u_i, sym_grad_u));
               else if (j_is_mu && !skew)
                 local_matrix_ij += phi_u_i * to_mult_by_phi_u_i_potential[j];
+              if (sd.laplace_beltrami && j_is_phi)
+                local_matrix_ij += scalar_product(
+                  CHNSSurfaceTension::stress_variation(grad_phi,
+                                                       grad_phi_phi[j],
+                                                       sd.surface_tension),
+                  grad_phi_u_i);
               if (additional_flux && !j_is_x && !skew)
                 local_matrix_ij += phi_u_i * additional_momentum_variation[j];
               if (skew && !j_is_x)
@@ -1170,6 +1200,19 @@ namespace Assembly
               {
                 if (j_is_x)
                 {
+                  if (sd.laplace_beltrami)
+                  {
+                    const auto &G = sd.grad_phi_x_moving[q][j];
+                    const auto  T =
+                      CHNSSurfaceTension::stress(grad_phi, sd.surface_tension);
+                    local_matrix_ij +=
+                      scalar_product(CHNSSurfaceTension::stress_variation(
+                                       grad_phi,
+                                       -(transpose(G) * grad_phi),
+                                       sd.surface_tension) +
+                                       trace(G) * T - T * transpose(G),
+                                     grad_phi_u_i);
+                  }
                   // Momentum : variation w.r.t. moving mesh position
 
                   // Simplification of the double contraction grad_phi_u_i : T,

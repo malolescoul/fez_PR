@@ -118,6 +118,11 @@ namespace CHNSEnergy
           u * (s.present_velocity_gradients[q] *
                (rho * a + s.diffusive_flux_factor * s.get_phase_flux(q))) +
           mu * (a * gp) + phi * (u * gm);
+      if (s.laplace_beltrami)
+        v[I::TransportPower] +=
+          scalar_product(CHNSSurfaceTension::stress(gp, s.surface_tension),
+                         s.present_velocity_gradients[q]) -
+          phi * (u * gm);
       if (s.enable_stabilization)
       {
         const auto R = momentum_residual<dim>(s, q);

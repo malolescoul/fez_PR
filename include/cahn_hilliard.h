@@ -7,7 +7,37 @@
 
 namespace CahnHilliard
 {
+  // Original activation width, also used by chemical-flux projection.
   constexpr double profile_correction_tail = 1. - 0.999 * 0.999;
+  const double profile_correction_activation_start =
+    std::sqrt(1. - 0.5 * profile_correction_tail);
+  const double profile_correction_cutoff =
+    std::sqrt(1. - 0.25 * profile_correction_tail);
+
+  struct ProfileActivation
+  {
+    double value;
+    double derivative;
+    double second_derivative;
+  };
+
+  // C2 quintic extinction; derivatives are with respect to phi.
+  inline ProfileActivation profile_activation(const double phi)
+  {
+    const double phase_factor = 1. - phi * phi;
+    constexpr double width = 0.25 * profile_correction_tail;
+    if (phase_factor <= width)
+      return {0., 0., 0.};
+    if (phase_factor >= 2. * width)
+      return {1., 0., 0.};
+    const double t = (phase_factor - width) / width;
+    const double dt = -2. * phi / width;
+    const double first = 30. * t * t * (t - 1.) * (t - 1.);
+    return {t * t * t * (10. + t * (-15. + 6. * t)),
+            first * dt,
+            60. * t * (2. * t * t - 3. * t + 1.) * dt * dt -
+              2. * first / width};
+  }
 
   struct ProfileInverse
   {
@@ -21,7 +51,7 @@ namespace CahnHilliard
    */
   inline ProfileInverse inverse_profile(const double phi)
   {
-    const double cutoff = std::sqrt(1. - 0.25 * profile_correction_tail);
+    const double cutoff = profile_correction_cutoff;
     if (std::abs(phi) <= cutoff)
       return {std::atanh(phi), 1. / (1. - phi * phi)};
     const double slope  = 1. / (1. - cutoff * cutoff);
@@ -51,18 +81,39 @@ namespace CahnHilliard
   template <int dim>
   struct ReconstructedProfile
   {
-    double                 value = 0.;
+    ReconstructedProfile() = default;
+
+    ReconstructedProfile(const double                  inverse_value,
+                         const dealii::Tensor<1, dim> &gradient,
+                         const dealii::Tensor<2, dim> &hessian)
+      : inverse_gradient(gradient)
+      , inverse_hessian(hessian)
+    {
+      set_inverse_value(inverse_value);
+    }
+
+    void set_inverse_value(const double inverse_value)
+    {
+      value = std::tanh(inverse_value);
+      // sech(s)^2 without subtracting two almost equal numbers. This also
+      // retains representable tails when tanh(s) has already rounded to +/-1.
+      const double e = std::exp(-2. * std::abs(inverse_value));
+      phase_factor   = 4. * e / ((1. + e) * (1. + e));
+    }
+
+    double                 value        = 0.;
+    double                 phase_factor = 1.;
     dealii::Tensor<1, dim> inverse_gradient;
     dealii::Tensor<2, dim> inverse_hessian;
 
     dealii::Tensor<1, dim> gradient() const
     {
-      return (1. - value * value) * inverse_gradient;
+      return phase_factor * inverse_gradient;
     }
 
     dealii::Tensor<2, dim> hessian() const
     {
-      return (1. - value * value) *
+      return phase_factor *
              (inverse_hessian -
               2. * value * outer_product(inverse_gradient, inverse_gradient));
     }
@@ -72,7 +123,7 @@ namespace CahnHilliard
                                     const dealii::Tensor<2, dim> &dh,
                                     const bool with_hessian) const
     {
-      const double          first  = 1. - value * value;
+      const double          first  = phase_factor;
       const double          second = -2. * value * first;
       ProfileVariation<dim> result{first * ds,
                                    first * dg + second * ds * inverse_gradient,
@@ -98,33 +149,100 @@ namespace CahnHilliard
   };
 
   /** Derivatives of the profile flux and its divergence at one quadrature
-   * point. The global mobility amplitude is held constant during linearization.
+   * point. The scalar/gradient/Hessian inputs are phi for the direct evaluator,
+   * and s for the reconstructed evaluator. The global amplitude is held fixed.
    */
   template <int dim>
   struct ProfileCorrectionLinearization
   {
-    dealii::Tensor<1, dim> flux_phi;
+    dealii::Tensor<1, dim> flux_value;
     dealii::Tensor<2, dim> flux_gradient;
-    double                 divergence_phi = 0.;
+    double                 divergence_value = 0.;
     dealii::Tensor<1, dim> divergence_gradient;
 
     ProfileCorrection<dim>
-    variation(const double                  dphi,
+    variation(const double                  dvalue,
               const dealii::Tensor<1, dim> &dgradient,
               const dealii::Tensor<2, dim> &dhessian) const
     {
-      return {dphi * flux_phi + flux_gradient * dgradient,
-              divergence_phi * dphi + divergence_gradient * dgradient +
+      return {dvalue * flux_value + flux_gradient * dgradient,
+              divergence_value * dvalue + divergence_gradient * dgradient +
                 scalar_product(flux_gradient, dhessian)};
     }
   };
 
+  /** Activated reconstructed flux. With phi_r=tanh(s), h=a(phi_r)*sech(s)^2,
+   * k=1/(sqrt(2)*epsilon), G=grad(s), write F=h*b*G where
+   * b=1-c*k/sqrt(|G|^2+beta^2*k^2), c=sqrt(1+beta^2).
+   * Cancel sech(s)^2 analytically before division, then apply activation.
+   * All linearization inputs are variations of s, G and Hessian(s), NOT phi_r.
+   */
+  template <int dim>
+  ProfileCorrection<dim> evaluate_profile_correction(
+    const ReconstructedProfile<dim>     &profile,
+    const double                         epsilon,
+    const bool                           compute_divergence = true,
+    ProfileCorrectionLinearization<dim> *linearization      = nullptr)
+  {
+    if (linearization)
+      *linearization = {};
+    const auto activation = profile_activation(profile.value);
+    if (activation.value == 0.)
+      return {};
+    constexpr double       beta  = 0.05;
+    const double           k     = 1. / (std::sqrt(2.) * epsilon);
+    const double           p     = profile.phase_factor;
+    const double           pp    = -2. * profile.value * p;
+    const double           h     = activation.value * p;
+    const double           hp    = activation.derivative * p * p +
+                                   activation.value * pp;
+    const auto            &G     = profile.inverse_gradient;
+    const auto            &H     = profile.inverse_hessian;
+    const double           S     = G.norm_square();
+    const double           R     = std::sqrt(S + beta * beta * k * k);
+    const double           ratio = std::sqrt(1. + beta * beta) * k / R;
+    const double           b     = 1. - ratio;
+    ProfileCorrection<dim> result;
+    result.flux = h * b * G;
+    if (!compute_divergence && !linearization)
+      return result;
+
+    const double inv_R2 = 1. / (R * R);
+    const double bS     = 0.5 * ratio * inv_R2;
+    const auto   HG     = H * G;
+    const double A      = G * HG;
+    const double T      = trace(H);
+    if (compute_divergence)
+      result.divergence = hp * b * S + h * b * T + 2. * h * bS * A;
+    if (linearization)
+    {
+      linearization->flux_value    = hp * b * G;
+      linearization->flux_gradient = 2. * h * bS * outer_product(G, G);
+      for (unsigned int d = 0; d < dim; ++d)
+        linearization->flux_gradient[d][d] += h * b;
+      if (compute_divergence)
+      {
+        const double hpp = activation.second_derivative * p * p * p +
+                           3. * activation.derivative * p * pp +
+                           (6. * profile.value * profile.value - 2.) * h;
+        const double bSS = -1.5 * bS * inv_R2;
+        linearization->divergence_value =
+          hpp * b * S + hp * b * T + 2. * hp * bS * A;
+        linearization->divergence_gradient =
+          (2. * hp * (b + bS * S) + 2. * h * bS * T + 4. * h * bSS * A) * G +
+          4. * h * bS * HG;
+      }
+    }
+    return result;
+  }
+
   /**
-   * Regularized profile flux F = a(phi)*(1-c*q/R)*grad(phi), where
+   * Direct-phase flux for manufactured solutions and equivalence checks:
+   * F = a(phi)*(1-c*q/R)*grad(phi), with the same C2 activation as above, where
    * q=(1-phi^2)/(sqrt(2)*epsilon), R^2=|grad(phi)|^2+beta^2*q^2 and
    * c=sqrt(1+beta^2). Thus F vanishes for the equilibrium tanh profile.
-   * The C2 activation a turns the correction off near the pure phases;
-   * beta regularizes the normal where the phase gradient vanishes.
+   * Activation makes the flux and its derivatives zero near pure phases.
+   * Assembly uses the reconstructed evaluator above.
    * The caller supplies the global mobility amplitude separately.
    * When requested, compute the derivatives once for all trial functions.
    */
@@ -139,31 +257,19 @@ namespace CahnHilliard
   {
     if (linearization)
       *linearization = {};
-    constexpr double beta         = 0.05;
-    constexpr double tail         = profile_correction_tail;
-    const double     phase_factor = 1. - phi * phi;
-    if (phase_factor <= 0.25 * tail)
+    const auto activation = profile_activation(phi);
+    if (activation.value == 0.)
       return {};
-
-    double a = 1., da = 0., dda = 0.;
-    if (phase_factor < 0.5 * tail)
-    {
-      const double width = 0.25 * tail;
-      const double t     = (phase_factor - width) / width;
-      const double dt    = -2. * phi / width;
-      const double first = 30. * t * t * (t - 1.) * (t - 1.);
-      a                  = t * t * t * (10. + t * (-15. + 6. * t));
-      da                 = first * dt;
-      if (linearization && compute_divergence)
-        dda =
-          60. * t * (2. * t * t - 3. * t + 1.) * dt * dt - 2. * first / width;
-    }
-    const double           q = phase_factor / (std::sqrt(2.) * epsilon);
-    const double           s = gradient.norm_square();
-    const double           R = std::sqrt(s + beta * beta * q * q);
+    constexpr double beta         = 0.05;
+    const double     phase_factor = 1. - phi * phi;
+    const double     q            = phase_factor / (std::sqrt(2.) * epsilon);
+    const double     s            = gradient.norm_square();
+    const double     R            = std::sqrt(s + beta * beta * q * q);
+    if (R == 0.)
+      return {};
     const double           c = std::sqrt(1. + beta * beta);
     const double           b = 1. - c * q / R;
-    const double           f = a * b;
+    const double           f = activation.value * b;
     ProfileCorrection<dim> result;
     result.flux = f * gradient;
     if (!compute_divergence && !linearization)
@@ -175,15 +281,15 @@ namespace CahnHilliard
     const double inv_R3 = 1. / (R * R * R);
     const double b_phi  = -c * dq * s * inv_R3;
     const double b_s    = 0.5 * c * q * inv_R3;
-    const double f_phi  = da * b + a * b_phi;
-    const double f_s    = a * b_s;
+    const double f_phi  = activation.derivative * b + activation.value * b_phi;
+    const double f_s    = activation.value * b_s;
     const auto   Hg     = hessian * gradient;
     const double gHg    = gradient * Hg;
     if (compute_divergence)
       result.divergence = f * trace(hessian) + f_phi * s + 2. * f_s * gHg;
     if (linearization)
     {
-      linearization->flux_phi = f_phi * gradient;
+      linearization->flux_value = f_phi * gradient;
       linearization->flux_gradient =
         2. * f_s * outer_product(gradient, gradient);
       for (unsigned int d = 0; d < dim; ++d)
@@ -196,10 +302,12 @@ namespace CahnHilliard
           -c * s * (ddq * inv_R3 - 3. * beta * beta * q * dq * dq * inv_R5);
         const double b_ps = -c * dq * (inv_R3 - 1.5 * s * inv_R5);
         const double b_ss = -0.75 * c * q * inv_R5;
-        const double f_pp = dda * b + 2. * da * b_phi + a * b_pp;
-        const double f_ps = da * b_s + a * b_ps;
-        const double f_ss = a * b_ss;
-        linearization->divergence_phi =
+        const double f_pp = activation.second_derivative * b +
+                            2. * activation.derivative * b_phi +
+                            activation.value * b_pp;
+        const double f_ps = activation.derivative * b_s + activation.value * b_ps;
+        const double f_ss = activation.value * b_ss;
+        linearization->divergence_value =
           f_phi * trace(hessian) + f_pp * s + 2. * f_ps * gHg;
         linearization->divergence_gradient =
           (2. * f_s * trace(hessian) + 2. * f_ps * s + 2. * f_phi +

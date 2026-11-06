@@ -1,6 +1,6 @@
 #ifndef chns_energy_h
 #define chns_energy_h
-
+#include <chns_surface_tension.h>
 #include <deal.II/base/point.h>
 #include <deal.II/base/tensor.h>
 
@@ -92,6 +92,11 @@ namespace CHNSEnergy
         (s.present_velocity_laplacians[q] + s.present_velocity_grad_div[q]) -
       2. * s.derivative_dynamic_viscosity_wrt_tracer[q] *
         (s.present_velocity_sym_gradients[q] * s.tracer_gradients[q]);
+    if (s.laplace_beltrami)
+      R -= s.tracer_values[q] * s.potential_gradients[q] +
+           CHNSSurfaceTension::force(s.tracer_gradients[q],
+                                     s.tracer_hessians[q],
+                                     s.surface_tension);
     if (s.skew_symmetric_momentum)
       R += s.energy_time[q].inertia -
            rho * s.present_velocity_time_derivatives[q] +
