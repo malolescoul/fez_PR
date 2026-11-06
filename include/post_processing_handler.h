@@ -194,6 +194,12 @@ public:
    */
   void write_pvd(const PrefixData &prefix_data = PrefixData()) const;
 
+  // Keep visualization history up to the checkpoint, excluding future output
+  // that will be recomputed. Missing PVD files are allowed for older runs.
+  void
+  restore_pvd_entries_until_time(double            max_time,
+                                 const PrefixData &prefix_data = PrefixData());
+
   /**
    * Calls the postprocess() function for each of the dof-based postprocessor
    * stored in field_postprocessors, and adds the computed data to the
@@ -299,6 +305,13 @@ public:
                            const TimeHandler           &time_handler);
   void save_chns_energy(const std::string &prefix) const;
   void load_chns_energy(const std::string &prefix);
+
+  template <typename VectorType>
+  void compute_surface_tension_force(const DoFHandler<dim> &dofs,
+                                     const Mapping<dim>    &mapping,
+                                     const Quadrature<dim> &quadrature,
+                                     const VectorType      &solution,
+                                     const TimeHandler     &time);
 
   void clear();
 
@@ -511,6 +524,19 @@ private:
     data_component_interpretation;
 
   // The times and names of the pvtu files in the pvd file
+  void remove_visualization_record(
+    std::vector<std::pair<double, std::string>> &records,
+    double                                       time,
+    const std::string                           &filename) const;
+
+  std::string  postprocessing_filename(const std::string &prefix) const;
+  void         process_surface_tension_force(const Tensor<1, dim> &force,
+                                             double                integral_magnitude,
+                                             const TimeHandler    &time);
+  TableHandler surface_tension_force_table;
+  unsigned int surface_tension_force_last_iteration =
+    numbers::invalid_unsigned_int;
+
   std::vector<std::pair<double, std::string>> visualization_times_and_names;
   std::vector<std::pair<double, std::string>>
     visualization_times_and_names_skin;
@@ -565,6 +591,50 @@ private:
 };
 
 /* ---------------- Template functions ----------------- */
+
+template <int dim>
+template <typename VectorType>
+void PostProcessingHandler<dim>::compute_surface_tension_force(
+  const DoFHandler<dim> &dofs,
+  const Mapping<dim>    &mapping,
+  const Quadrature<dim> &quadrature,
+  const VectorType      &solution,
+  const TimeHandler     &time)
+{
+  if (!post_proc_param.surface_tension_force.enable)
+    return;
+
+  FEValues<dim>                    values(mapping,
+                       dofs.get_fe(),
+                       quadrature,
+                       update_values | update_gradients | update_JxW_values);
+  const FEValuesExtractors::Scalar phase(ordering.phi_lower);
+  const FEValuesExtractors::Scalar potential(ordering.mu_lower);
+  std::vector<double>              phi(quadrature.size());
+  std::vector<Tensor<1, dim>>      grad_mu(quadrature.size());
+  std::array<double, dim + 1>      local{}, global{};
+  for (const auto &cell : dofs.active_cell_iterators())
+    if (cell->is_locally_owned())
+    {
+      values.reinit(cell);
+      values[phase].get_function_values(solution, phi);
+      values[potential].get_function_gradients(solution, grad_mu);
+      for (unsigned int q = 0; q < quadrature.size(); ++q)
+      {
+        const auto force = -phi[q] * grad_mu[q];
+        for (unsigned int d = 0; d < dim; ++d)
+          local[d] += force[d] * values.JxW(q);
+        local[dim] += force.norm() * values.JxW(q);
+      }
+    }
+  Utilities::MPI::sum<double>(make_array_view(local),
+                              mpi_communicator,
+                              make_array_view(global));
+  Tensor<1, dim> force;
+  for (unsigned int d = 0; d < dim; ++d)
+    force[d] = global[d];
+  process_surface_tension_force(force, global[dim], time);
+}
 
 template <int dim>
 void PostProcessingHandler<dim>::PrefixData::append_to_prefix_or_suffix(
@@ -723,11 +793,14 @@ void PostProcessingHandler<dim>::output_volume_fields(
      * If steady, use time step counter as pseudo-time,
      * otherwise use current time.
      */
-    visualization_times_and_names.emplace_back(
+    const double visualization_time =
       time_handler.is_steady() ?
         static_cast<double>(time_handler.current_time_iteration) :
-        current_time,
-      pvtu_file);
+        current_time;
+    remove_visualization_record(visualization_times_and_names,
+                                visualization_time,
+                                pvtu_file);
+    visualization_times_and_names.emplace_back(visualization_time, pvtu_file);
   }
 
   data_out->clear_data_vectors();
@@ -808,11 +881,15 @@ void PostProcessingHandler<dim>::output_skin_fields(
      * If steady, use time step counter as pseudo-time,
      * otherwise use current time.
      */
-    visualization_times_and_names_skin.emplace_back(
+    const double visualization_time =
       time_handler.is_steady() ?
         static_cast<double>(time_handler.current_time_iteration) :
-        current_time,
-      pvtu_file);
+        current_time;
+    remove_visualization_record(visualization_times_and_names_skin,
+                                visualization_time,
+                                pvtu_file);
+    visualization_times_and_names_skin.emplace_back(visualization_time,
+                                                    pvtu_file);
   }
 
   data_out_skin->clear_data_vectors();
@@ -948,8 +1025,8 @@ void PostProcessingHandler<dim>::compute_forces(
 
     if (mpi_rank == 0 && should_output_forces(time_handler))
     {
-      std::ofstream outfile(output_param.output_dir +
-                            post_proc_param.forces.output_prefix + ".txt");
+      std::ofstream outfile(
+        postprocessing_filename(post_proc_param.forces.output_prefix));
       write_table(outfile, forces_table, post_proc_param.forces);
     }
   }
@@ -1025,9 +1102,9 @@ void PostProcessingHandler<dim>::compute_forces(
     if (mpi_rank == 0 &&
         should_output_postprocessing(time_handler, slices_param))
     {
-      std::ofstream slices_outfile(output_param.output_dir +
-                                   post_proc_param.forces.output_prefix + "_" +
-                                   slices_param.output_prefix + ".txt");
+      std::ofstream slices_outfile(
+        postprocessing_filename(post_proc_param.forces.output_prefix + "_" +
+                                slices_param.output_prefix));
       write_table(slices_outfile,
                   forces_table_per_slice,
                   post_proc_param.forces);
@@ -1126,9 +1203,8 @@ void PostProcessingHandler<dim>::compute_structure_mean_position(
   }
   if (mpi_rank == 0 && should_output_mean_position(time_handler))
   {
-    std::ofstream outfile(output_param.output_dir +
-                          post_proc_param.structure_position.output_prefix +
-                          ".txt");
+    std::ofstream outfile(postprocessing_filename(
+      post_proc_param.structure_position.output_prefix));
     write_table(outfile,
                 structure_mean_position_table,
                 post_proc_param.structure_position);
@@ -1189,9 +1265,8 @@ void PostProcessingHandler<dim>::compute_field_integrals(
       // Accumulate every time step; the frequency only controls file output.
       if (should_output_postprocessing(time_handler, integral_param))
       {
-        std::ofstream outfile(output_param.output_dir +
-                              integral_param.output_prefix + "_" +
-                              variable_name + ".txt");
+        std::ofstream outfile(postprocessing_filename(
+          integral_param.output_prefix + "_" + variable_name));
         write_table(outfile, table, integral_param);
       }
     };
@@ -1256,8 +1331,7 @@ void PostProcessingHandler<dim>::compute_multiphase_indicators(
 
       if (should_output_postprocessing(time_handler, param))
       {
-        std::ofstream outfile(output_param.output_dir + param.output_prefix +
-                              ".txt");
+        std::ofstream outfile(postprocessing_filename(param.output_prefix));
         write_table(outfile, table, param);
       }
     };

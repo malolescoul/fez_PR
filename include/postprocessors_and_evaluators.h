@@ -300,6 +300,47 @@ namespace PostProcessingTools
     const unsigned int mu_lower;
   };
 
+  /**
+   * Capillary force per unit volume on the right of the momentum equation.
+   * The assembled residual contains +phi grad(mu); mu already contains the
+   * surface energy coefficient. Use the solved phase without a limiter.
+   */
+  template <int dim>
+  class SurfaceTensionForcePostProcessor : public DataPostprocessorVector<dim>
+  {
+  public:
+    SurfaceTensionForcePostProcessor(const ComponentOrdering &ordering)
+      : DataPostprocessorVector<dim>("surface_tension_force",
+                                     update_values | update_gradients)
+      , phi_lower(ordering.phi_lower)
+      , mu_lower(ordering.mu_lower)
+    {
+      AssertThrow(
+        ordering.has_variable(SolverInfo::VariableType::phase_tracer) &&
+          ordering.has_variable(SolverInfo::VariableType::phase_potential),
+        ExcMessage(
+          "Surface tension force postprocessing requires CHNS fields."));
+    }
+
+    void
+    evaluate_vector_field(const DataPostprocessorInputs::Vector<dim> &input,
+                          std::vector<Vector<double>> &output) const override
+    {
+      AssertDimension(input.solution_values.size(), output.size());
+      AssertDimension(input.solution_gradients.size(), output.size());
+      for (unsigned int q = 0; q < output.size(); ++q)
+      {
+        AssertDimension(output[q].size(), dim);
+        for (unsigned int d = 0; d < dim; ++d)
+          output[q][d] = -input.solution_values[q][phi_lower] *
+                         input.solution_gradients[q][mu_lower][d];
+      }
+    }
+
+  private:
+    const unsigned int phi_lower, mu_lower;
+  };
+
   /** Reconstruct the CHNS mixture density at quadrature points. */
   template <int dim>
   class DensityEvaluator

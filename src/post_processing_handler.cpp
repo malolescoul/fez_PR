@@ -5,6 +5,58 @@
 #include <postprocessors_and_evaluators.h>
 
 #include <filesystem>
+#include <regex>
+
+namespace
+{
+  double pvd_time_tolerance(const double time)
+  {
+    return 1e-12 * std::max(1.0, std::abs(time));
+  }
+
+  std::vector<std::pair<double, std::string>>
+  read_pvd_entries_until_time(const std::string &filename,
+                              const double       max_time)
+  {
+    std::ifstream input(filename);
+    if (!input)
+      return {};
+
+    const std::regex dataset_regex("<DataSet[^>]*>");
+    const std::regex timestep_regex("timestep=\"([^\"]+)\"");
+    const std::regex file_regex("file=\"([^\"]+)\"");
+    const double     tolerance = pvd_time_tolerance(max_time);
+
+    std::vector<std::pair<double, std::string>> records;
+    std::string                                 line;
+    while (std::getline(input, line))
+    {
+      std::smatch dataset_match;
+      if (!std::regex_search(line, dataset_match, dataset_regex))
+        continue;
+
+      const std::string dataset = dataset_match.str();
+      std::smatch       timestep_match;
+      std::smatch       file_match;
+      if (!std::regex_search(dataset, timestep_match, timestep_regex) ||
+          !std::regex_search(dataset, file_match, file_regex))
+        continue;
+
+      try
+      {
+        const double time = std::stod(timestep_match[1].str());
+        if (time <= max_time + tolerance)
+          records.emplace_back(time, file_match[1].str());
+      }
+      catch (const std::exception &)
+      {}
+    }
+
+    return records;
+  }
+} // namespace
+
+
 
 template <int dim>
 PostProcessingHandler<dim>::PostProcessingHandler(
@@ -48,6 +100,11 @@ PostProcessingHandler<dim>::PostProcessingHandler(
     using PP       = Parameters::PostProcessing;
 
     postprocessors.clear();
+    if (pp.surface_tension_force.enable)
+      postprocessors.emplace_back(
+        std::make_unique<
+          PostProcessingTools::SurfaceTensionForcePostProcessor<dim>>(
+          ordering));
     if (ordering.has_variable(SolverInfo::VariableType::phase_tracer) &&
         ordering.has_variable(SolverInfo::VariableType::phase_potential) &&
         ordering.has_variable(SolverInfo::VariableType::pressure))
@@ -172,6 +229,47 @@ void PostProcessingHandler<dim>::write_pvd(const PrefixData &prefix_data) const
 }
 
 template <int dim>
+void PostProcessingHandler<dim>::restore_pvd_entries_until_time(
+  const double      max_time,
+  const PrefixData &prefix_data)
+{
+  if (mpi_rank != 0)
+    return;
+
+  std::string suffix;
+  prefix_data.append_to_prefix_or_suffix(output_param, true, suffix);
+  suffix += ".pvd";
+
+  if (output_param.write_results)
+    visualization_times_and_names = read_pvd_entries_until_time(
+      output_param.output_dir + output_param.output_prefix + suffix, max_time);
+
+  if (output_param.skin.write_results)
+    visualization_times_and_names_skin =
+      read_pvd_entries_until_time(output_param.output_dir +
+                                    output_param.skin.output_prefix + suffix,
+                                  max_time);
+}
+
+template <int dim>
+void PostProcessingHandler<dim>::remove_visualization_record(
+  std::vector<std::pair<double, std::string>> &visualization_records,
+  const double                                 time,
+  const std::string                           &filename) const
+{
+  // Transfers intentionally separate two solutions by 1e-12. Do not merge
+  // nearby times; the filename also identifies a restored checkpoint whose
+  // time was rounded when the PVD was written.
+  visualization_records.erase(std::remove_if(visualization_records.begin(),
+                                             visualization_records.end(),
+                                             [&](const auto &record) {
+                                               return record.first == time ||
+                                                      record.second == filename;
+                                             }),
+                              visualization_records.end());
+}
+
+template <int dim>
 void PostProcessingHandler<dim>::create_slices()
 {
   const std::string &dir = post_proc_param.slices.along_which_axis;
@@ -216,6 +314,8 @@ void PostProcessingHandler<dim>::clear()
     data_out_skin->clear_data_vectors();
   visualization_times_and_names.clear();
   visualization_times_and_names_skin.clear();
+  surface_tension_force_table.clear();
+  surface_tension_force_last_iteration = numbers::invalid_unsigned_int;
   subdomains.reinit(0);
   slice_indices.reinit(0);
 }
@@ -336,6 +436,61 @@ template <int dim>
 void PostProcessingHandler<dim>::write_forces(std::ostream &out) const
 {
   write_table(out, forces_table, post_proc_param.forces);
+}
+
+template <int dim>
+std::string PostProcessingHandler<dim>::postprocessing_filename(
+  const std::string &prefix) const
+{
+  return output_param.output_dir + output_param.output_prefix + "_" + prefix +
+         ".txt";
+}
+
+template <int dim>
+void PostProcessingHandler<dim>::process_surface_tension_force(
+  const Tensor<1, dim> &force,
+  const double          integral_magnitude,
+  const TimeHandler    &time)
+{
+  const auto &param = post_proc_param.surface_tension_force;
+  std::string error;
+  if (mpi_rank == 0 &&
+      surface_tension_force_last_iteration != time.current_time_iteration)
+    try
+    {
+      auto      &table = surface_tension_force_table;
+      const auto add   = [&](const std::string &name, const double value) {
+        table.add_value(name, value);
+        table.set_precision(name, param.precision);
+        table.set_scientific(name, true);
+      };
+      add("time", time.current_time);
+      table.add_value("iteration", time.current_time_iteration);
+      const std::array<std::string, 3> names{{"Fx", "Fy", "Fz"}};
+      for (unsigned int d = 0; d < dim; ++d)
+        add(names[d], force[d]);
+      add("resultant_norm", force.norm());
+      add("integral_magnitude", integral_magnitude);
+      if (param.verbosity == Parameters::Verbosity::verbose)
+        std::cout << "Surface tension force at t=" << time.current_time << ": "
+                  << force << std::endl;
+      if (should_output_postprocessing(time, param))
+      {
+        std::filesystem::create_directories(output_param.output_dir);
+        const auto    filename = postprocessing_filename(param.output_prefix);
+        std::ofstream out(filename);
+        AssertThrow(out.good(), ExcMessage("Cannot write " + filename));
+        write_table(out, table, param);
+        AssertThrow(out.good(), ExcMessage("Failed to write " + filename));
+      }
+      surface_tension_force_last_iteration = time.current_time_iteration;
+    }
+    catch (const std::exception &exception)
+    {
+      error = exception.what();
+    }
+  error = Utilities::MPI::broadcast(mpi_communicator, error, 0);
+  AssertThrow(error.empty(), ExcMessage(error));
 }
 
 template <int dim>
@@ -650,8 +805,7 @@ void PostProcessingHandler<dim>::process_chns_energy(
         if (should_output_postprocessing(time, param))
         {
           std::filesystem::create_directories(output_param.output_dir);
-          const auto filename =
-            output_param.output_dir + param.output_prefix + ".txt";
+          const auto    filename = postprocessing_filename(param.output_prefix);
           std::ofstream out(filename);
           AssertThrow(out.good(), ExcMessage("Cannot write " + filename));
           write_table(out, table, param);
@@ -691,6 +845,15 @@ void PostProcessingHandler<dim>::save_chns_energy(
         archive << work;
       for (const auto &table : chns_energy_tables)
         archive << table;
+
+      // Separate optional sidecar keeps existing energy checkpoints compatible.
+      std::ofstream force_file(prefix + ".surface_tension_force",
+                               std::ios::binary);
+      AssertThrow(force_file.good(),
+                  ExcMessage("Cannot write capillary force checkpoint"));
+      boost::archive::binary_oarchive force_archive(force_file);
+      force_archive << surface_tension_force_table
+                    << surface_tension_force_last_iteration;
     }
     catch (const std::exception &exception)
     {
@@ -728,6 +891,14 @@ void PostProcessingHandler<dim>::load_chns_energy(const std::string &prefix)
         // so its historical power is zero. Fill those rows when adding the
         // first new value, after the current time has been appended.
         chns_energy_tables[1].set_auto_fill_mode(true);
+      }
+      std::ifstream force_file(prefix + ".surface_tension_force",
+                               std::ios::binary);
+      if (force_file)
+      {
+        boost::archive::binary_iarchive force_archive(force_file);
+        force_archive >> surface_tension_force_table >>
+          surface_tension_force_last_iteration;
       }
     }
     catch (const std::exception &exception)

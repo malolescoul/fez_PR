@@ -1069,6 +1069,11 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::
 {
   TimerOutput::Scope t(this->computing_timer, "Compute multiphase indicators");
   const auto        &pp = this->param.postprocessing;
+  this->postproc_handler->compute_surface_tension_force(*this->dof_handler,
+                                                        *this->moving_mapping,
+                                                        *this->quadrature,
+                                                        *this->present_solution,
+                                                        this->time_handler);
   if (pp.chns_conservation.enable || pp.chns_energy.enable ||
       pp.chns_phase_energy.enable || pp.chns_stabilization_energy.enable)
   {

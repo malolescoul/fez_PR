@@ -408,6 +408,9 @@ namespace Parameters
     PostProcessingFile chns_conservation, chns_energy, chns_phase_energy,
       chns_stabilization_energy;
 
+    // CHNS capillary force density -phi grad(mu): visualization and integrals.
+    PostProcessingFile surface_tension_force;
+
     /**
      * A base struct for postprocessing tools which produce a field, which is
      * typically written to the visualization file alongside the solution (e.g.,
