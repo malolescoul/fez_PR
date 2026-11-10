@@ -7,8 +7,8 @@
 
 namespace CahnHilliard
 {
-  // Bound the profile flux coefficient below by -5, retaining zero at r=1.
-  const double profile_correction_beta = 1. / std::sqrt(35.);
+  // Bound the profile flux coefficient below by -3, retaining zero at r=1.
+  const double profile_correction_beta = 1. / std::sqrt(15.);
 
   // Original activation width, also used by chemical-flux projection.
   constexpr double profile_correction_tail = 1. - 0.999 * 0.999;
