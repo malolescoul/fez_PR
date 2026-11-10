@@ -7,6 +7,9 @@
 
 namespace CahnHilliard
 {
+  // Bound the profile flux coefficient below by -5, retaining zero at r=1.
+  const double profile_correction_beta = 1. / std::sqrt(35.);
+
   // Original activation width, also used by chemical-flux projection.
   constexpr double profile_correction_tail = 1. - 0.999 * 0.999;
   const double profile_correction_activation_start =
@@ -189,7 +192,7 @@ namespace CahnHilliard
     const auto activation = profile_activation(profile.value);
     if (activation.value == 0.)
       return {};
-    constexpr double       beta  = 0.05;
+    const double           beta  = profile_correction_beta;
     const double           k     = 1. / (std::sqrt(2.) * epsilon);
     const double           p     = profile.phase_factor;
     const double           pp    = -2. * profile.value * p;
@@ -260,7 +263,7 @@ namespace CahnHilliard
     const auto activation = profile_activation(phi);
     if (activation.value == 0.)
       return {};
-    constexpr double beta         = 0.05;
+    const double     beta         = profile_correction_beta;
     const double     phase_factor = 1. - phi * phi;
     const double     q            = phase_factor / (std::sqrt(2.) * epsilon);
     const double     s            = gradient.norm_square();
