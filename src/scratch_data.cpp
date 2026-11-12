@@ -22,6 +22,11 @@ namespace NavierStokesScratch
     if (enable_stabilization)
       flags |= update_hessians; // | update_inverse_jacobians;
 
+    // CHNS uses the current mapping to set the viscous stabilization length.
+    if constexpr ((update_flags & cahn_hilliard) != 0)
+      if (enable_stabilization)
+        flags |= update_inverse_jacobians;
+
     return flags;
   }
 

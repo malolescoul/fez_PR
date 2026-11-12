@@ -12,21 +12,16 @@ Number of degrees of freedom: 142
 Time step 1 - Advancing to t = 0.01.
 Max absolute error analytical vs fd matrix is 8.26787e-07
 Newton iter.  0:          nonlinear residual = 3.37765026e+01
-	Line search with alpha = 1.000 : res = 1.18865797e+00
 Newton iter.  1:          nonlinear residual = 1.18865797e+00	(M)
-	Line search with alpha = 1.000 : res = 3.62359807e-03
 Newton iter.  2:          nonlinear residual = 3.62359807e-03	(M)
-	Line search with alpha = 1.000 : res = 1.03845622e-08
 Newton iter.  3:          nonlinear residual = 1.03845622e-08	(M)
-	Line search with alpha = 1.000 : res = 1.23366020e-14
+Newton iter.  4:          nonlinear residual = 1.25036877e-14	(M)
 Stopping because residual is below prescribed tolerance (1.00e-10)
 
 Time step 2 - Advancing to t = 2.00e-02.
 Max absolute error analytical vs fd matrix is 7.71e-07
 Newton iter.  0:          nonlinear residual = 8.73067535e+00
-	Line search with alpha = 1.000 : res = 2.37525646e-01
 Newton iter.  1:          nonlinear residual = 2.37525646e-01	(M)
-	Line search with alpha = 1.000 : res = 4.77642395e-05
 Newton iter.  2:          nonlinear residual = 4.77642395e-05	(M)
-	Line search with alpha = 1.000 : res = 7.75977909e-13
+Newton iter.  3:          nonlinear residual = 7.74912394e-13	(M)
 Stopping because residual is below prescribed tolerance (1.00e-10)
