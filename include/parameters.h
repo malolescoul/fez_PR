@@ -222,8 +222,20 @@ namespace Parameters
         enum class RefinementStrategy
         {
           FixedNumber,
-          FixedFraction
+          FixedFraction,
+          // Graded band around the CHNS interface: each cell targets a level
+          // given by the distance to the interface reconstructed from phi.
+          InterfaceBand
         } refinement_strategy;
+
+        // Interface band: increasing thresholds on |phi|. Cells closer to the
+        // interface than the iso |phi| = thresholds[k] (plus the margin)
+        // target the level max_level - k, the other cells min_level.
+        std::vector<double> interface_band_thresholds;
+
+        // Interface band: extra distance, in units of the interface thickness,
+        // added to each threshold to anticipate the interface motion.
+        double interface_band_margin;
 
         // Variables driving mesh refinement/coarsening
         std::vector<SolverInfo::VariableType> variables_for_adaptation;
