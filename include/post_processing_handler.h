@@ -308,6 +308,13 @@ public:
   void save_chns_energy(const std::string &prefix) const;
   void load_chns_energy(const std::string &prefix);
 
+  template <typename VectorType>
+  void compute_surface_tension_force(const DoFHandler<dim> &dofs,
+                                     const Mapping<dim>    &mapping,
+                                     const Quadrature<dim> &quadrature,
+                                     const VectorType      &solution,
+                                     const TimeHandler     &time);
+
   void clear();
 
   /**
@@ -528,6 +535,13 @@ private:
     std::vector<std::pair<double, std::string>> &records,
     const std::string                           &filename) const;
 
+  void         process_surface_tension_force(const Tensor<1, dim> &force,
+                                             double                integral_magnitude,
+                                             const TimeHandler    &time);
+  TableHandler surface_tension_force_table;
+  unsigned int surface_tension_force_last_iteration =
+    numbers::invalid_unsigned_int;
+
   // The times and names of the pvtu files in the pvd file
   std::vector<std::pair<double, std::string>> visualization_times_and_names;
   std::vector<std::pair<double, std::string>>
@@ -583,6 +597,50 @@ private:
 };
 
 /* ---------------- Template functions ----------------- */
+
+template <int dim>
+template <typename VectorType>
+void PostProcessingHandler<dim>::compute_surface_tension_force(
+  const DoFHandler<dim> &dofs,
+  const Mapping<dim>    &mapping,
+  const Quadrature<dim> &quadrature,
+  const VectorType      &solution,
+  const TimeHandler     &time)
+{
+  if (!post_proc_param.surface_tension_force.enable)
+    return;
+
+  FEValues<dim>                    values(mapping,
+                       dofs.get_fe(),
+                       quadrature,
+                       update_values | update_gradients | update_JxW_values);
+  const FEValuesExtractors::Scalar phase(ordering.phi_lower);
+  const FEValuesExtractors::Scalar potential(ordering.mu_lower);
+  std::vector<double>              phi(quadrature.size());
+  std::vector<Tensor<1, dim>>      grad_mu(quadrature.size());
+  std::array<double, dim + 1>      local{}, global{};
+  for (const auto &cell : dofs.active_cell_iterators())
+    if (cell->is_locally_owned())
+    {
+      values.reinit(cell);
+      values[phase].get_function_values(solution, phi);
+      values[potential].get_function_gradients(solution, grad_mu);
+      for (unsigned int q = 0; q < quadrature.size(); ++q)
+      {
+        const auto force = -phi[q] * grad_mu[q];
+        for (unsigned int d = 0; d < dim; ++d)
+          local[d] += force[d] * values.JxW(q);
+        local[dim] += force.norm() * values.JxW(q);
+      }
+    }
+  Utilities::MPI::sum<double>(make_array_view(local),
+                              mpi_communicator,
+                              make_array_view(global));
+  Tensor<1, dim> force;
+  for (unsigned int d = 0; d < dim; ++d)
+    force[d] = global[d];
+  process_surface_tension_force(force, global[dim], time);
+}
 
 template <int dim>
 void PostProcessingHandler<dim>::PrefixData::append_to_prefix_or_suffix(

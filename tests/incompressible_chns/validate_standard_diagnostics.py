@@ -48,9 +48,9 @@ def main():
                 text = text.replace('set enable tracer supg = false', 'set enable tracer supg = true')
             name = order + ('_stabilized' if stabilized else '_galerkin')
             directory = run(name, text)
-            energy = read_table(directory / 'chns_energy.txt')
-            phases = read_table(directory / 'chns_phase_energy.txt')
-            conservation = read_table(directory / 'chns_conservation.txt')
+            energy = read_table(directory / 'solution_chns_energy.txt')
+            phases = read_table(directory / 'solution_chns_phase_energy.txt')
+            conservation = read_table(directory / 'solution_chns_conservation.txt')
             assert len(energy) >= 3, 'The simulation did not advance'
             assert math.isnan(energy[0]['temporal_power'])
             assert all(math.isfinite(row['total_energy']) for row in energy), name
@@ -76,7 +76,7 @@ def main():
     directory = run('restart', restart_text + checkpoint.replace(
         'set enable checkpoint = true',
         'set enable checkpoint = true\n set restart = true'))
-    restarted = read_table(directory / 'chns_energy.txt')
+    restarted = read_table(directory / 'solution_chns_energy.txt')
     assert len(restarted) == len(reference)
     for key in ['reference_time', 'total_energy', 'energy_change_from_reference']:
         assert abs(restarted[-1][key] - reference[-1][key]) < 1.e-10, key

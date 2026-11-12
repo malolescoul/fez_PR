@@ -649,6 +649,10 @@ namespace Parameters
       declare_postprocessing_file(prm);
       prm.set("output prefix", "chns_stabilization_energy");
       prm.leave_subsection();
+      prm.enter_subsection("surface tension force");
+      declare_postprocessing_file(prm);
+      prm.set("output prefix", "surface_tension_force");
+      prm.leave_subsection();
       prm.enter_subsection("vorticity");
       {
         declare_postprocessing_field(prm);
@@ -823,6 +827,9 @@ namespace Parameters
       prm.leave_subsection();
       prm.enter_subsection("chns stabilization energy");
       read_postprocessing_file(prm, chns_stabilization_energy);
+      prm.leave_subsection();
+      prm.enter_subsection("surface tension force");
+      read_postprocessing_file(prm, surface_tension_force);
       prm.leave_subsection();
       prm.enter_subsection("vorticity");
       {

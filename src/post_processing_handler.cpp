@@ -101,6 +101,11 @@ PostProcessingHandler<dim>::PostProcessingHandler(
     using PP       = Parameters::PostProcessing;
 
     postprocessors.clear();
+    if (pp.surface_tension_force.enable)
+      postprocessors.emplace_back(
+        std::make_unique<
+          PostProcessingTools::SurfaceTensionForcePostProcessor<dim>>(
+          ordering));
     if (ordering.has_variable(SolverInfo::VariableType::phase_tracer) &&
         ordering.has_variable(SolverInfo::VariableType::phase_potential) &&
         ordering.has_variable(SolverInfo::VariableType::pressure))
@@ -307,6 +312,8 @@ void PostProcessingHandler<dim>::clear()
     data_out_skin->clear_data_vectors();
   visualization_times_and_names.clear();
   visualization_times_and_names_skin.clear();
+  surface_tension_force_table.clear();
+  surface_tension_force_last_iteration = numbers::invalid_unsigned_int;
   subdomains.reinit(0);
   slice_indices.reinit(0);
 }
@@ -435,6 +442,53 @@ template <int dim>
 void PostProcessingHandler<dim>::write_forces(std::ostream &out) const
 {
   write_table(out, forces_table, post_proc_param.forces);
+}
+
+template <int dim>
+void PostProcessingHandler<dim>::process_surface_tension_force(
+  const Tensor<1, dim> &force,
+  const double          integral_magnitude,
+  const TimeHandler    &time)
+{
+  const auto &param = post_proc_param.surface_tension_force;
+  std::string error;
+  if (mpi_rank == 0 &&
+      surface_tension_force_last_iteration != time.current_time_iteration)
+    try
+    {
+      auto      &table = surface_tension_force_table;
+      const auto add   = [&](const std::string &name, const double value) {
+        table.add_value(name, value);
+        table.set_precision(name, param.precision);
+        table.set_scientific(name, true);
+      };
+      add("time", time.current_time);
+      table.add_value("iteration", time.current_time_iteration);
+      const std::array<std::string, 3> names{{"Fx", "Fy", "Fz"}};
+      for (unsigned int d = 0; d < dim; ++d)
+        add(names[d], force[d]);
+      add("resultant_norm", force.norm());
+      add("integral_magnitude", integral_magnitude);
+      if (param.verbosity == Parameters::Verbosity::verbose)
+        std::cout << "Surface tension force at t=" << time.current_time << ": "
+                  << force << std::endl;
+      if (should_output_postprocessing(time, param))
+      {
+        std::filesystem::create_directories(output_param.output_dir);
+        const auto    filename = postprocessing_filename(param.output_prefix);
+        std::ofstream out(filename);
+        AssertThrow(out.good(), ExcMessage("Cannot write " + filename));
+        write_table(out, table, param);
+        AssertThrow(out.good(), ExcMessage("Failed to write " + filename));
+      }
+      surface_tension_force_last_iteration = time.current_time_iteration;
+    }
+    catch (const std::exception &exception)
+    {
+      error = exception.what();
+    }
+  error = Utilities::MPI::broadcast(mpi_communicator, error, 0);
+  AssertThrow(error.empty(), ExcMessage(error));
 }
 
 template <int dim>
@@ -736,8 +790,7 @@ void PostProcessingHandler<dim>::process_chns_energy(
         if (should_output_postprocessing(time, param))
         {
           std::filesystem::create_directories(output_param.output_dir);
-          const auto filename =
-            output_param.output_dir + param.output_prefix + ".txt";
+          const auto    filename = postprocessing_filename(param.output_prefix);
           std::ofstream out(filename);
           AssertThrow(out.good(), ExcMessage("Cannot write " + filename));
           write_table(out, table, param);
@@ -777,6 +830,15 @@ void PostProcessingHandler<dim>::save_chns_energy(
         archive << work;
       for (const auto &table : chns_energy_tables)
         archive << table;
+
+      // Separate optional sidecar keeps existing energy checkpoints compatible.
+      std::ofstream force_file(prefix + ".surface_tension_force",
+                               std::ios::binary);
+      AssertThrow(force_file.good(),
+                  ExcMessage("Cannot write capillary force checkpoint"));
+      boost::archive::binary_oarchive force_archive(force_file);
+      force_archive << surface_tension_force_table
+                    << surface_tension_force_last_iteration;
     }
     catch (const std::exception &exception)
     {
@@ -814,6 +876,14 @@ void PostProcessingHandler<dim>::load_chns_energy(const std::string &prefix)
         // so its historical power is zero. Fill those rows when adding the
         // first new value, after the current time has been appended.
         chns_energy_tables[1].set_auto_fill_mode(true);
+      }
+      std::ifstream force_file(prefix + ".surface_tension_force",
+                               std::ios::binary);
+      if (force_file)
+      {
+        boost::archive::binary_iarchive force_archive(force_file);
+        force_archive >> surface_tension_force_table >>
+          surface_tension_force_last_iteration;
       }
     }
     catch (const std::exception &exception)
