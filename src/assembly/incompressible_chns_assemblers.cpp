@@ -41,6 +41,7 @@ namespace Assembly
 
       auto &local_rhs = copy_data.local_rhs(sd.active_fe_index);
 
+      const double k                     = sd.laplace_beltrami ? 0. : 1.;
       const double sigma_tilde_over_eps  = sd.sigma_tilde / sd.epsilon;
       const double sigma_tilde_times_eps = sd.sigma_tilde * sd.epsilon;
       const auto  &body_force            = sd.body_force;
@@ -90,7 +91,7 @@ namespace Assembly
 
         const auto to_mult_by_phi_u_i =
           rho * (dudt + grad_u * u_conv - body_force) + diffusive_flux +
-          phi * grad_mu + source_u;
+          k * phi * grad_mu + source_u;
         const auto to_mult_by_phi_phi_i =
           dphidt + u_conv * grad_phi + source_phi;
         const auto to_mult_by_phi_mu_i =
@@ -144,6 +145,11 @@ namespace Assembly
             local_rhs_i -=
               phi_u[i] * to_mult_by_phi_u_i - div_phi_u[i] * p +
               2. * eta * scalar_product(sym_grad_phi_u[i], sym_grad_u);
+            if (sd.laplace_beltrami)
+              local_rhs_i -=
+                scalar_product(CHNSSurfaceTension::stress(grad_phi,
+                                                          sd.surface_tension),
+                               grad_phi_u[i]);
 
             if constexpr (BaseType::with_stabilization)
               // SUPG stabilization
@@ -199,6 +205,7 @@ namespace Assembly
       auto &local_matrix = copy_data.local_matrix(sd.active_fe_index);
 
       const double bdf_c0                = sd.bdf_c0;
+      const double k                     = sd.laplace_beltrami ? 0. : 1.;
       const double sigma_tilde_over_eps  = sd.sigma_tilde / sd.epsilon;
       const double sigma_tilde_times_eps = sd.sigma_tilde * sd.epsilon;
       const auto  &body_force            = sd.body_force;
@@ -354,10 +361,10 @@ namespace Assembly
 
         // Precompute shape functions-independent terms
         const auto to_mult_by_phi_u_i_phi_phi_j =
-          (drhodphi * (dudt + u_dot_grad_u_ale - body_force) + grad_mu);
+          (drhodphi * (dudt + u_dot_grad_u_ale - body_force) + k * grad_mu);
 
         const auto momentum_partial_residual =
-          rho * (dudt - body_force + u_dot_grad_u_ale) + phi * grad_mu +
+          rho * (dudt - body_force + u_dot_grad_u_ale) + k * phi * grad_mu +
           source_u;
         const auto phi_partial_residual =
           dphidt + u_conv * grad_phi + source_phi;
@@ -480,7 +487,7 @@ namespace Assembly
 
           to_mult_by_phi_u_i_potential[j] =
             diffusive_flux_factor * grad_u * grad_phi_mu_j +
-            phi * grad_phi_mu_j;
+            k * phi * grad_phi_mu_j;
 
           phi_u_j_x_grad_phi[j] = phi_u_j * grad_phi;
 
@@ -519,10 +526,17 @@ namespace Assembly
             // Variation w.r.t. potential
             strong_residual_momentum_variation[j] +=
               diffusive_flux_factor * grad_u * grad_phi_mu_j +
-              phi * grad_phi_mu_j;
+              k * phi * grad_phi_mu_j;
             if (additional_flux)
               strong_residual_momentum_variation[j] +=
                 additional_momentum_variation[j];
+            if (sd.laplace_beltrami)
+              strong_residual_momentum_variation[j] -=
+                CHNSSurfaceTension::force_variation(grad_phi,
+                                                    sd.tracer_hessians[q],
+                                                    grad_phi_phi[j],
+                                                    sd.hessian_shape_phi[q][j],
+                                                    sd.surface_tension);
           }
 
           if constexpr (BaseType::with_tracer_stabilization)
@@ -556,8 +570,8 @@ namespace Assembly
                 0.;
 
             Tensor<2, dim> dhess_phi_x;
-            if constexpr (BaseType::with_tracer_stabilization)
-              if (sd.gradient_dependent_mobility)
+            if ((sd.enable_tracer_stabilization && sd.gradient_dependent_mobility) ||
+                (sd.laplace_beltrami && sd.enable_stabilization))
               {
                 const auto &H = sd.tracer_hessians[q];
                 const auto &K = (*hessian_phi_x_moving)[j];
@@ -646,7 +660,7 @@ namespace Assembly
             to_mult_by_phi_u_i_moving_mesh[j] =
               momentum_partial_residual * trG +
               rho * (grad_u * (-bdf_c0 * phi_x_j - G * u_conv)) -
-              phi * transpose_G * grad_mu +
+              k * phi * transpose_G * grad_mu +
               diffusive_flux_factor * grad_u * val * grad_mu +
               sd.diffusive_flux_factor * dM_x * (grad_u * grad_mu);
             Tensor<1, dim> weak_correction_x;
@@ -752,7 +766,14 @@ namespace Assembly
                     sd.diffusive_flux_factor *
                     (dgrad_u_dx * sd.get_correction_flux(q) +
                      grad_u * dcorrection_x.flux);
-                const auto dcapillary_dx = phi * dgrad_mu_dx;
+                auto dcapillary_dx = k * phi * dgrad_mu_dx;
+                if (sd.laplace_beltrami)
+                  dcapillary_dx -=
+                    CHNSSurfaceTension::force_variation(grad_phi,
+                                                        sd.tracer_hessians[q],
+                                                        dgrad_phi_dx,
+                                                        dhess_phi_x,
+                                                        sd.surface_tension);
 
                 strong_residual_momentum_x_variation[j] =
                   rho * (dgrad_u_dx * u_conv + grad_u * du_conv_dx) +
@@ -875,6 +896,12 @@ namespace Assembly
                                  scalar_product(sym_grad_phi_u_i, sym_grad_u));
               else if (j_is_mu)
                 local_matrix_ij += phi_u_i * to_mult_by_phi_u_i_potential[j];
+              if (sd.laplace_beltrami && j_is_phi)
+                local_matrix_ij += scalar_product(
+                  CHNSSurfaceTension::stress_variation(grad_phi,
+                                                       grad_phi_phi[j],
+                                                       sd.surface_tension),
+                  grad_phi_u_i);
               if (additional_flux && !j_is_x)
                 local_matrix_ij += phi_u_i * additional_momentum_variation[j];
 
@@ -892,6 +919,19 @@ namespace Assembly
               {
                 if (j_is_x)
                 {
+                  if (sd.laplace_beltrami)
+                  {
+                    const auto &G = sd.grad_phi_x_moving[q][j];
+                    const auto  T =
+                      CHNSSurfaceTension::stress(grad_phi, sd.surface_tension);
+                    local_matrix_ij +=
+                      scalar_product(CHNSSurfaceTension::stress_variation(
+                                       grad_phi,
+                                       -(transpose(G) * grad_phi),
+                                       sd.surface_tension) +
+                                       trace(G) * T - T * transpose(G),
+                                     grad_phi_u_i);
+                  }
                   // Momentum : variation w.r.t. moving mesh position
 
                   // Simplification of the double contraction grad_phi_u_i : T,

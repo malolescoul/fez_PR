@@ -1169,7 +1169,8 @@ namespace NavierStokesScratch
           fe_values_moving[potential].get_function_hessians(current_solution,
                                                             potential_hessians);
       }
-      if (gradient_dependent_mobility && enable_tracer_stabilization)
+      if ((gradient_dependent_mobility && enable_tracer_stabilization) ||
+          (laplace_beltrami && enable_stabilization))
         fe_values_moving[tracer].get_function_hessians(current_solution,
                                                        tracer_hessians);
       // Previous solutions
@@ -1185,9 +1186,10 @@ namespace NavierStokesScratch
           // Shape functions on moving mesh
           shape_phi[q][k]      = fe_values_moving[tracer].value(k, q);
           grad_shape_phi[q][k] = fe_values_moving[tracer].gradient(k, q);
-          if ((gradient_dependent_mobility ||
-               param.cahn_hilliard.enable_profile_correction) &&
-              enable_tracer_stabilization)
+          if (((gradient_dependent_mobility ||
+                param.cahn_hilliard.enable_profile_correction) &&
+               enable_tracer_stabilization) ||
+              (laplace_beltrami && enable_stabilization))
             hessian_shape_phi[q][k] = fe_values_moving[tracer].hessian(k, q);
           shape_mu[q][k]      = fe_values_moving[potential].value(k, q);
           grad_shape_mu[q][k] = fe_values_moving[potential].gradient(k, q);
@@ -1467,6 +1469,16 @@ namespace NavierStokesScratch
                                       previous_solutions,
                                       source_terms,
                                       exact_solution);
+            if constexpr (enable_cahn_hilliard)
+              if (laplace_beltrami)
+              {
+                (*active_fe_face_values)[tracer].get_function_gradients(
+                  current_solution, face_tracer_gradients[i_face]);
+                for (unsigned int q = 0; q < n_faces_q_points; ++q)
+                  for (unsigned int k = 0; k < dofs_per_cell; ++k)
+                    grad_shape_phi_face[i_face][q][k] =
+                      (*active_fe_face_values)[tracer].gradient(k, q);
+              }
             if constexpr (enable_compressible)
               reinit_compressible_face(i_face,
                                        *active_fe_face_values,
@@ -1785,6 +1797,10 @@ namespace NavierStokesScratch
     std::vector<std::vector<Tensor<2, dim>>>                 hessian_shape_phi;
     double         epsilon;
     double         sigma_tilde;
+    std::vector<std::vector<Tensor<1, dim>>> face_tracer_gradients;
+    std::vector<std::vector<std::vector<Tensor<1, dim>>>> grad_shape_phi_face;
+    double         surface_tension  = 0.;
+    bool           laplace_beltrami = false;
     double         diffusive_flux_factor;
     // Enlarged (psi) Helmholtz length scale squared (L^2, L = width factor *
     // epsilon) and the raw mu-correction factor. Only set when enlarged.

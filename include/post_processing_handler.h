@@ -1,6 +1,7 @@
 #ifndef POST_PROCESSING_HANDLER_H
 #define POST_PROCESSING_HANDLER_H
 
+#include <chns_capillary_projection.h>
 #include <chns_energy.h>
 #include <components_ordering.h>
 #include <deal.II/base/table_handler.h>
@@ -533,6 +534,8 @@ private:
   void         process_surface_tension_force(const Tensor<1, dim> &force,
                                              double                integral_magnitude,
                                              const TimeHandler    &time);
+  const Parameters::CahnHilliard<dim> &cahn_hilliard_param;
+  std::unique_ptr<CHNSSurfaceTension::WeakForceProjection<dim>> geometric_force;
   TableHandler surface_tension_force_table;
   unsigned int surface_tension_force_last_iteration =
     numbers::invalid_unsigned_int;
@@ -603,6 +606,24 @@ void PostProcessingHandler<dim>::compute_surface_tension_force(
 {
   if (!post_proc_param.surface_tension_force.enable)
     return;
+
+  if (cahn_hilliard_param.surface_tension_representation ==
+      Parameters::CahnHilliard<
+        dim>::SurfaceTensionRepresentation::laplace_beltrami)
+  {
+    geometric_force =
+      std::make_unique<CHNSSurfaceTension::WeakForceProjection<dim>>(
+        dofs.get_triangulation());
+    const auto result =
+      geometric_force->compute(dofs,
+                               mapping,
+                               quadrature,
+                               solution,
+                               ordering.phi_lower,
+                               cahn_hilliard_param.surface_tension);
+    process_surface_tension_force(result.first, result.second, time);
+    return;
+  }
 
   FEValues<dim>                    values(mapping,
                        dofs.get_fe(),
@@ -716,6 +737,29 @@ void PostProcessingHandler<dim>::output_fields(const Mapping<dim> &mapping,
   if (post_proc_param.slices.enable && slice_indices.size() == 0)
     create_slices();
 
+  if (post_proc_param.surface_tension_force.enable &&
+      cahn_hilliard_param.surface_tension_representation ==
+        Parameters::CahnHilliard<
+          dim>::SurfaceTensionRepresentation::laplace_beltrami &&
+      (should_output_volume_fields(time_handler) ||
+       should_output_skin_fields(time_handler)))
+  {
+    std::unique_ptr<Quadrature<dim>> q;
+    const unsigned                   order = dof_handler->get_fe().degree + 2;
+    if (dof_handler->get_fe().reference_cell().is_simplex())
+      q = std::make_unique<QGaussSimplex<dim>>(order);
+    else
+      q = std::make_unique<QGauss<dim>>(order);
+    geometric_force =
+      std::make_unique<CHNSSurfaceTension::WeakForceProjection<dim>>(
+        dof_handler->get_triangulation());
+    geometric_force->compute(*dof_handler,
+                             mapping,
+                             *q,
+                             solution,
+                             ordering.phi_lower,
+                             cahn_hilliard_param.surface_tension);
+  }
   // Export fields in volume
   if (should_output_volume_fields(time_handler))
     output_volume_fields(mapping, solution, time_handler, prefix_data);
@@ -747,6 +791,8 @@ void PostProcessingHandler<dim>::output_volume_fields(
   for (const auto &postprocessor : postprocessors)
     data_out->add_data_vector(solution, *postprocessor);
 
+  if (geometric_force)
+    geometric_force->add_data(*data_out);
   data_out->build_patches(mapping,
                           output_param.n_subdivisions,
                           DataOut<dim>::CurvedCellRegion::curved_inner_cells);
@@ -836,6 +882,8 @@ void PostProcessingHandler<dim>::output_skin_fields(
                                    "slice_index",
                                    DataOutFaces<dim>::type_cell_data);
   }
+  if (geometric_force)
+    geometric_force->add_data(*data_out_skin);
   data_out_skin->build_patches(mapping, output_param.n_subdivisions);
 
   std::string prefix =

@@ -327,9 +327,19 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::MMSSourceTerm::
   Tensor<1, dim> div_viscous = (eta * (lap_u + grad_div_u) +
                                 2. * detadphi * grad_phi * symmetrize(grad_u));
 
+  // Match the manufactured source to the selected capillary coupling.
+  Tensor<1, dim> capillary_residual = phi * grad_mu;
+  if (cahn_hilliard_param.surface_tension_representation ==
+      Parameters::CahnHilliard<
+        dim>::SurfaceTensionRepresentation::laplace_beltrami)
+    capillary_residual =
+      -CHNSSurfaceTension::force(grad_phi,
+                                 Tensor<2, dim>(mms.exact_tracer->hessian(p)),
+                                 cahn_hilliard_param.surface_tension);
   // Navier-Stokes momentum (velocity) source term
-  Tensor<1, dim> f = -(rho * (dudt_eulerian + uDotGradu - body_force) +
-                       J_flux * grad_u + grad_p - div_viscous + phi * grad_mu);
+  Tensor<1, dim> f =
+    -(rho * (dudt_eulerian + uDotGradu - body_force) + J_flux * grad_u +
+      grad_p - div_viscous + capillary_residual);
   for (unsigned int d = 0; d < dim; ++d)
     values[u_lower + d] = f[d];
 

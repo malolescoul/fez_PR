@@ -75,6 +75,7 @@ PostProcessingHandler<dim>::PostProcessingHandler(
   , dof_handler(&dof_handler, typeid(*this).name())
   , mpi_communicator(dof_handler.get_mpi_communicator())
   , mpi_rank(Utilities::MPI::this_mpi_process(mpi_communicator))
+  , cahn_hilliard_param(param.cahn_hilliard)
 {
   if (output_param.write_results || output_param.skin.write_results)
   {
@@ -100,12 +101,17 @@ PostProcessingHandler<dim>::PostProcessingHandler(
     using PP       = Parameters::PostProcessing;
 
     postprocessors.clear();
-    if (pp.surface_tension_force.enable)
+    const bool geometric =
+      param.cahn_hilliard.surface_tension_representation ==
+      Parameters::CahnHilliard<
+        dim>::SurfaceTensionRepresentation::laplace_beltrami;
+    if (pp.surface_tension_force.enable && !geometric)
       postprocessors.emplace_back(
         std::make_unique<
           PostProcessingTools::SurfaceTensionForcePostProcessor<dim>>(
           ordering));
-    if (ordering.has_variable(SolverInfo::VariableType::phase_tracer) &&
+    if (!geometric &&
+        ordering.has_variable(SolverInfo::VariableType::phase_tracer) &&
         ordering.has_variable(SolverInfo::VariableType::phase_potential) &&
         ordering.has_variable(SolverInfo::VariableType::pressure))
       postprocessors.emplace_back(
@@ -139,6 +145,7 @@ void PostProcessingHandler<dim>::attach_triangulation_and_dof_handler(
          ExcMessage("The provided triangulation does not match the one "
                     "attached to the provided DoFHandler"));
 
+  geometric_force.reset();
   // Assign triangulation and dof handler to this object
   this->triangulation = &triangulation;
   this->dof_handler   = &dof_handler;
@@ -314,6 +321,7 @@ void PostProcessingHandler<dim>::clear()
     data_out_skin->clear_data_vectors();
   visualization_times_and_names.clear();
   visualization_times_and_names_skin.clear();
+  geometric_force.reset();
   surface_tension_force_table.clear();
   surface_tension_force_last_iteration = numbers::invalid_unsigned_int;
   subdomains.reinit(0);

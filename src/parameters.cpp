@@ -1658,6 +1658,11 @@ namespace Parameters
         degenerate_mobility->declare_parameters(prm, 1, "(1-x*x)*(1-x*x)");
       }
       prm.leave_subsection();
+      prm.declare_entry("surface tension representation",
+                        "korteweg",
+                        Patterns::Selection("korteweg|laplace beltrami"),
+                        "Capillary coupling: Korteweg or weak Laplace-Beltrami "
+                        "with the exact linear weight |grad(phi)|/2.");
       prm.declare_entry("surface tension",
                         "1.",
                         Patterns::Double(),
@@ -1791,6 +1796,10 @@ namespace Parameters
         }
       }
       prm.leave_subsection();
+      surface_tension_representation =
+        prm.get("surface tension representation") == "laplace beltrami" ?
+          SurfaceTensionRepresentation::laplace_beltrami :
+          SurfaceTensionRepresentation::korteweg;
       surface_tension     = prm.get_double("surface tension");
       epsilon_interface   = prm.get_double("interface thickness");
       with_tracer_limiter = prm.get_bool("enable tracer limiter");

@@ -1,6 +1,7 @@
 #ifndef chns_energy_h
 #define chns_energy_h
 
+#include <chns_surface_tension.h>
 #include <deal.II/base/point.h>
 #include <deal.II/base/tensor.h>
 
@@ -30,15 +31,20 @@ namespace CHNSEnergy
     if constexpr (Scratch::enable_pseudo_solid)
       a -= s.present_mesh_velocity_values[q];
     const double rho = s.density[q];
-    auto         R =
-      rho * (s.present_velocity_time_derivatives[q] +
-             s.present_velocity_gradients[q] * a - s.body_force) +
-      s.diffusive_flux[q] + s.tracer_values[q] * s.potential_gradients[q] +
-      s.present_pressure_gradients[q] + s.source_term_velocity[q] -
-      s.dynamic_viscosity[q] *
-        (s.present_velocity_laplacians[q] + s.present_velocity_grad_div[q]) -
-      2. * s.derivative_dynamic_viscosity_wrt_tracer[q] *
-        (s.present_velocity_sym_gradients[q] * s.tracer_gradients[q]);
+    auto         R   = rho * (s.present_velocity_time_derivatives[q] +
+                    s.present_velocity_gradients[q] * a - s.body_force) +
+             s.diffusive_flux[q] +
+             (s.laplace_beltrami ? 0. : 1.) * s.tracer_values[q] *
+               s.potential_gradients[q] +
+             s.present_pressure_gradients[q] + s.source_term_velocity[q] -
+             s.dynamic_viscosity[q] * (s.present_velocity_laplacians[q] +
+                                       s.present_velocity_grad_div[q]) -
+             2. * s.derivative_dynamic_viscosity_wrt_tracer[q] *
+               (s.present_velocity_sym_gradients[q] * s.tracer_gradients[q]);
+    if (s.laplace_beltrami)
+      R -= CHNSSurfaceTension::force(s.tracer_gradients[q],
+                                     s.tracer_hessians[q],
+                                     s.surface_tension);
     return R;
   }
 

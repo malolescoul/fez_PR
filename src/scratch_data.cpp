@@ -422,6 +422,10 @@ namespace NavierStokesScratch
     mobility              = ch.mobility;
     epsilon               = ch.epsilon_interface;
     sigma_tilde           = 3. / (2. * sqrt(2.)) * ch.surface_tension;
+    surface_tension       = ch.surface_tension;
+    laplace_beltrami      = ch.surface_tension_representation ==
+                       Parameters::CahnHilliard<
+                         dim>::SurfaceTensionRepresentation::laplace_beltrami;
     diffusive_flux_factor = 0.5 * (density1 - density0);
     using MobilityModel = typename Parameters::CahnHilliard<dim>::MobilityModel;
     variable_mobility   = ch.mobility_model != MobilityModel::constant;
@@ -659,6 +663,16 @@ namespace NavierStokesScratch
       derivative_density_wrt_tracer.resize(n_q_points);
       dynamic_viscosity.resize(n_q_points);
       derivative_dynamic_viscosity_wrt_tracer.resize(n_q_points);
+      if (laplace_beltrami)
+      {
+        face_tracer_gradients.resize(
+          n_faces, std::vector<Tensor<1, dim>>(n_faces_q_points));
+        grad_shape_phi_face.resize(
+          n_faces,
+          std::vector<std::vector<Tensor<1, dim>>>(
+            n_faces_q_points, std::vector<Tensor<1, dim>>(max_dofs_per_cell)));
+      }
+
 
       tracer_values.resize(n_q_points);
       tracer_time_derivatives.resize(n_q_points);
@@ -686,11 +700,12 @@ namespace NavierStokesScratch
         if (enable_tracer_stabilization)
           flux_projection_divergence.resize(n_q_points);
       }
-      if (enable_tracer_stabilization &&
-          (gradient_dependent_mobility ||
-           param.cahn_hilliard.enable_profile_correction))
+      if ((enable_tracer_stabilization &&
+           (gradient_dependent_mobility ||
+            param.cahn_hilliard.enable_profile_correction)) ||
+          (laplace_beltrami && enable_stabilization))
       {
-        if (gradient_dependent_mobility)
+        if (gradient_dependent_mobility || laplace_beltrami)
           tracer_hessians.resize(n_q_points);
         hessian_shape_phi.resize(
           n_q_points, std::vector<Tensor<2, dim>>(max_dofs_per_cell));

@@ -1,6 +1,8 @@
 #ifndef INCOMPRESSIBLE_CHNS_ASSEMBLERS_H
 #define INCOMPRESSIBLE_CHNS_ASSEMBLERS_H
 
+#include <chns_surface_tension.h>
+
 #include <assembly/assembler.h>
 #include <boundary_conditions.h>
 #include <components_ordering.h>
@@ -306,6 +308,72 @@ namespace Assembly
     public:
       const Table<2, DoFTools::Coupling> &coupling_table;
     };
+    /** Boundary traction associated with the diffuse geometric stress.
+     * Together with -int T:grad(v), this represents div(T) without adding
+     * artificial capillary forces at the domain cut. Existing velocity/phase
+     * boundary conditions still determine the contact geometry.
+     */
+    template <int dim, typename ScratchData, typename CopyData>
+    class CapillaryBoundaryAssembler
+      : public AssemblerBase<ScratchData, CopyData>
+    {
+    public:
+      void assemble_rhs(const ScratchData &sd, CopyData &cd) const override
+      {
+        if (!cd.cell_is_at_boundary)
+          return;
+        auto &rhs = cd.local_rhs(sd.active_fe_index);
+        for (unsigned f = 0; f < sd.n_faces; ++f)
+          if (sd.face_at_boundary[f])
+            for (unsigned q = 0; q < sd.n_faces_q_points; ++q)
+            {
+              const auto traction =
+                CHNSSurfaceTension::stress(sd.face_tracer_gradients[f][q],
+                                           sd.surface_tension) *
+                sd.face_normals_moving[f][q];
+              for (unsigned i = 0; i < sd.dofs_per_cell; ++i)
+                rhs(i) += (sd.phi_u_face[f][q][i] * traction) *
+                          sd.face_JxW_moving[f][q];
+            }
+      }
+      void assemble_matrix(const ScratchData &sd, CopyData &cd) const override
+      {
+        if (!cd.cell_is_at_boundary)
+          return;
+        auto &matrix = cd.local_matrix(sd.active_fe_index);
+        for (unsigned f = 0; f < sd.n_faces; ++f)
+          if (sd.face_at_boundary[f])
+            for (unsigned q = 0; q < sd.n_faces_q_points; ++q)
+            {
+              const auto &g = sd.face_tracer_gradients[f][q];
+              const auto &n = sd.face_normals_moving[f][q];
+              const auto  T = CHNSSurfaceTension::stress(g, sd.surface_tension);
+              for (unsigned j = 0; j < sd.dofs_per_cell; ++j)
+              {
+                auto           dg = sd.grad_shape_phi_face[f][q][j];
+                Tensor<1, dim> dn_measure;
+                if constexpr (ScratchData::enable_pseudo_solid)
+                {
+                  const auto G =
+                    sd.grad_phi_x_face[f][q][j] *
+                    invert(sd.present_face_position_gradient[f][q]);
+                  dg -= transpose(G) * g;
+                  dn_measure = trace(G) * n - transpose(G) * n;
+                }
+                const auto dt =
+                  CHNSSurfaceTension::stress_variation(g,
+                                                       dg,
+                                                       sd.surface_tension) *
+                    n +
+                  T * dn_measure;
+                for (unsigned i = 0; i < sd.dofs_per_cell; ++i)
+                  matrix(i, j) -=
+                    (sd.phi_u_face[f][q][i] * dt) * sd.face_JxW_moving[f][q];
+              }
+            }
+      }
+    };
+
   } // namespace IncompressibleCHNS
 } // namespace Assembly
 
@@ -389,8 +457,13 @@ namespace Assembly
               ordering, coupling_table));
       }
 
-      // Assign the relevant boundary assemblers
-      // ...
+      if (param.cahn_hilliard.surface_tension_representation ==
+          Parameters::CahnHilliard<
+            dim>::SurfaceTensionRepresentation::laplace_beltrami)
+        assemblers.emplace_back(
+          std::make_unique<
+            CapillaryBoundaryAssembler<dim, ScratchData, CopyData>>());
+
     }
   } // namespace IncompressibleCHNS
 } // namespace Assembly
