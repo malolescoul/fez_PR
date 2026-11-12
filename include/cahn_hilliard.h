@@ -7,6 +7,33 @@
 
 namespace CahnHilliard
 {
+  struct ProfileInverse
+  {
+    double value;
+    double derivative;
+  };
+
+  /** Inverse of the tanh profile, atanh(phi), with an odd C2 continuation
+   * beyond |phi| = sqrt(1 - (1 - 0.999^2) / 4). The continuation has a bounded
+   * positive slope, so pure phases and overshoots give finite values without
+   * clipping phi. Used to measure the distance to the interface.
+   */
+  inline ProfileInverse inverse_profile(const double phi)
+  {
+    const double cutoff = std::sqrt(1. - 0.25 * (1. - 0.999 * 0.999));
+    if (std::abs(phi) <= cutoff)
+      return {std::atanh(phi), 1. / (1. - phi * phi)};
+    const double slope  = 1. / (1. - cutoff * cutoff);
+    const double length = (1. - cutoff * cutoff) / cutoff;
+    const double offset = std::abs(phi) - cutoff;
+    return {std::copysign(std::atanh(cutoff) +
+                            slope *
+                              (3. * offset +
+                               2. * length * std::expm1(-offset / length)),
+                          phi),
+            slope * (3. - 2. * std::exp(-offset / length))};
+  }
+
   template <int dim>
   struct ProfileCorrection
   {
