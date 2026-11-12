@@ -1528,6 +1528,12 @@ void NavierStokesSolver<dim, with_moving_mesh>::restart()
 
   // Update the time handler
   time_handler.update_parameters_after_restart(param.time_integration);
+
+  postproc_handler->restore_pvd_entries_until_time(
+    time_handler.is_steady() ?
+      static_cast<double>(time_handler.current_time_iteration) :
+      time_handler.current_time,
+    prefix_data);
 }
 
 // Explicit instantiation
