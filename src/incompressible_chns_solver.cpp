@@ -1,5 +1,6 @@
 #include <assembly/elasticity_assemblers.h>
 #include <assembly/incompressible_chns_assemblers.h>
+#include <chns_energy_diagnostics.h>
 #include <compare_matrix.h>
 #include <deal.II/base/multithread_info.h>
 #include <deal.II/base/work_stream.h>
@@ -468,7 +469,8 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::prepare_timestep()
 
 template <int dim, bool with_moving_mesh, bool with_enlarged>
 double CHNSSolver<dim, with_moving_mesh, with_enlarged>::
-  compute_profile_correction_coefficient(const bool manufactured) const
+  compute_profile_correction_coefficient(const bool manufactured,
+                                         const bool postprocessing) const
 {
   const auto &ch = this->param.cahn_hilliard;
   if (!ch.enable_profile_correction)
@@ -497,11 +499,11 @@ double CHNSSolver<dim, with_moving_mesh, with_enlarged>::
         values.reinit(cell);
         if (!manufactured)
         {
-          values[tracer].get_function_values(this->evaluation_point, phase);
-          values[tracer].get_function_gradients(this->evaluation_point,
-                                                gradients);
-          values[velocity].get_function_values(this->evaluation_point,
-                                               velocities);
+          const auto &state =
+            postprocessing ? *this->present_solution : this->evaluation_point;
+          values[tracer].get_function_values(state, phase);
+          values[tracer].get_function_gradients(state, gradients);
+          values[velocity].get_function_values(state, velocities);
         }
         for (unsigned int q = 0; q < n_q; ++q)
         {
@@ -938,6 +940,61 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::
   solver_specific_post_processing()
 {
   TimerOutput::Scope t(this->computing_timer, "Compute multiphase indicators");
+  const auto        &pp = this->param.postprocessing;
+  if (pp.chns_conservation.enable || pp.chns_energy.enable ||
+      pp.chns_phase_energy.enable || pp.chns_stabilization_energy.enable)
+  {
+    // Reuse the assembly's physical fields and strong residuals. A private
+    // scratch keeps diagnostics from changing the Newton assembly state.
+    ScratchData diagnostics(*scratch_data);
+    diagnostics.set_keep_tau_constant(false);
+    diagnostics.profile_correction_coefficient =
+      compute_profile_correction_coefficient(false, true);
+    CHNSEnergy::Integrals local, global;
+    const bool transient = !this->time_handler.is_steady() &&
+                           this->time_handler.current_time_iteration > 0 &&
+                           this->time_handler.current_time_iteration !=
+                             this->time_handler.time_iteration_at_last_restart;
+    std::vector<Tensor<1, dim>> old_gradient(this->quadrature->size()),
+      gradient_rate(this->quadrature->size());
+    for (const auto &cell : this->dof_handler->active_cell_iterators())
+      if (cell->is_locally_owned())
+      {
+        diagnostics.reinit(cell,
+                           *this->present_solution,
+                           *this->previous_solutions,
+                           *this->source_terms,
+                           *this->exact_solution);
+        const auto &values = diagnostics.get_current_fe_values();
+        std::fill(gradient_rate.begin(), gradient_rate.end(), Tensor<1, dim>());
+        if (transient)
+        {
+          const auto &c = this->time_handler.get_bdf_coefficients();
+          for (unsigned int q = 0; q < diagnostics.n_q_points; ++q)
+            gradient_rate[q] = c[0] * diagnostics.tracer_gradients[q];
+          for (unsigned int k = 1; k < c.size(); ++k)
+          {
+            values[diagnostics.tracer].get_function_gradients(
+              (*this->previous_solutions)[k - 1], old_gradient);
+            for (unsigned int q = 0; q < diagnostics.n_q_points; ++q)
+              gradient_rate[q] += c[k] * old_gradient[q];
+          }
+        }
+        for (unsigned int q = 0; q < diagnostics.n_q_points; ++q)
+          CHNSEnergy::integrate_point<dim>(diagnostics,
+                                           q,
+                                           gradient_rate[q],
+                                           values.quadrature_point(q),
+                                           transient ||
+                                             this->time_handler.is_steady(),
+                                           local);
+      }
+    Utilities::MPI::sum<double>(make_array_view(local.values),
+                                this->mpi_communicator,
+                                make_array_view(global.values));
+    this->postproc_handler->process_chns_energy(global, this->time_handler);
+  }
+
 
   this->postproc_handler->compute_multiphase_indicators(*this->ordering,
                                                         *this->dof_handler,

@@ -207,6 +207,10 @@ namespace NavierStokesScratch
      */
     ScratchData(const ScratchData &other);
 
+    /** Values on the cell most recently passed to reinit(). */
+    const FEValues<dim> &get_current_fe_values() const
+    { return *active_fe_values; }
+
     /**
      * Control whether the stabilization parameters stay constant during reinit.
      * When enabled, keep tau from the last reinit on the unperturbed cell;

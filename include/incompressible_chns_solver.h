@@ -71,8 +71,9 @@ public:
   /** Global correction amplitude from the Newton state, or the exact MMS state.
    * Kept constant during cell Jacobian assembly and diagnostic perturbations.
    */
-  double
-  compute_profile_correction_coefficient(const bool manufactured = false) const;
+  double compute_profile_correction_coefficient(
+    const bool manufactured   = false,
+    const bool postprocessing = false) const;
 
   virtual void create_solver_specific_zero_constraints() override;
   virtual void create_solver_specific_nonzero_constraints() override;

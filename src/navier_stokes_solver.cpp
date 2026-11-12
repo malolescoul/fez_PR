@@ -1490,6 +1490,7 @@ void NavierStokesSolver<dim, with_moving_mesh>::checkpoint()
   }
 
   triangulation->save(tmp_checkpoint_prefix);
+  postproc_handler->save_chns_energy(tmp_checkpoint_prefix);
 
   replace_temporary_files(param.output.output_dir,
                           "tmp." + param.checkpoint_restart.filename,
@@ -1522,6 +1523,8 @@ void NavierStokesSolver<dim, with_moving_mesh>::restart()
     archive >> *this;
     archive >> time_handler;
   }
+
+  postproc_handler->load_chns_energy(checkpoint_prefix);
 
   // Update the time handler
   time_handler.update_parameters_after_restart(param.time_integration);

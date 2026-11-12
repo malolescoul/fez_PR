@@ -619,6 +619,22 @@ namespace Parameters
         declare_postprocessing_file(prm);
       }
       prm.leave_subsection();
+      prm.enter_subsection("chns conservation");
+      declare_postprocessing_file(prm);
+      prm.set("output prefix", "chns_conservation");
+      prm.leave_subsection();
+      prm.enter_subsection("chns energy");
+      declare_postprocessing_file(prm);
+      prm.set("output prefix", "chns_energy");
+      prm.leave_subsection();
+      prm.enter_subsection("chns phase energy");
+      declare_postprocessing_file(prm);
+      prm.set("output prefix", "chns_phase_energy");
+      prm.leave_subsection();
+      prm.enter_subsection("chns stabilization energy");
+      declare_postprocessing_file(prm);
+      prm.set("output prefix", "chns_stabilization_energy");
+      prm.leave_subsection();
       prm.enter_subsection("vorticity");
       {
         declare_postprocessing_field(prm);
@@ -781,6 +797,18 @@ namespace Parameters
       {
         read_postprocessing_file(prm, chns_avg_velocity);
       }
+      prm.leave_subsection();
+      prm.enter_subsection("chns conservation");
+      read_postprocessing_file(prm, chns_conservation);
+      prm.leave_subsection();
+      prm.enter_subsection("chns energy");
+      read_postprocessing_file(prm, chns_energy);
+      prm.leave_subsection();
+      prm.enter_subsection("chns phase energy");
+      read_postprocessing_file(prm, chns_phase_energy);
+      prm.leave_subsection();
+      prm.enter_subsection("chns stabilization energy");
+      read_postprocessing_file(prm, chns_stabilization_energy);
       prm.leave_subsection();
       prm.enter_subsection("vorticity");
       {

@@ -405,6 +405,9 @@ namespace Parameters
     {
     } chns_avg_velocity;
 
+    PostProcessingFile chns_conservation, chns_energy, chns_phase_energy,
+      chns_stabilization_energy;
+
     /**
      * A base struct for postprocessing tools which produce a field, which is
      * typically written to the visualization file alongside the solution (e.g.,

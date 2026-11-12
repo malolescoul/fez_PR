@@ -1,3 +1,4 @@
+#include <chns_energy.h>
 
 #include <assembly/incompressible_chns_assemblers.h>
 #include <components_ordering.h>
@@ -59,8 +60,6 @@ namespace Assembly
         const auto  &grad_u     = sd.present_velocity_gradients[q];
         const auto  &sym_grad_u = sd.present_velocity_sym_gradients[q];
         const double div_u      = sd.present_velocity_divergence[q];
-        const auto  &lap_u      = sd.present_velocity_laplacians[q];
-        const auto  &grad_div_u = sd.present_velocity_grad_div[q];
         const auto  &source_u   = sd.source_term_velocity[q];
 
         auto u_conv = u;
@@ -72,7 +71,6 @@ namespace Assembly
         }
 
         const auto &p        = sd.present_pressure_values[q];
-        const auto &grad_p   = sd.present_pressure_gradients[q];
         const auto &source_p = sd.source_term_pressure[q];
 
         const auto phase_flux = sd.get_phase_flux(q);
@@ -114,16 +112,12 @@ namespace Assembly
         {
           tau                   = sd.tau_supg_velocity[q];
           inv_rho               = 1. / rho;
-          const double detadphi = sd.derivative_dynamic_viscosity_wrt_tracer[q];
 
           // Compute strong residual of the momentum equation, in force units
           // (i.e. multiplied by the density). The SUPG and PSPG test operators
           // are ((u_conv + J/rho) . grad(v)) and grad(q) / rho.
           // Tau keeps its existing definition based on u_conv.
-          strong_residual_momentum =
-            rho * (dudt + grad_u * u_conv - body_force) + diffusive_flux +
-            phi * grad_mu + grad_p + source_u - eta * (lap_u + grad_div_u) -
-            2. * detadphi * (sym_grad_u * grad_phi);
+          strong_residual_momentum = CHNSEnergy::momentum_residual<dim>(sd, q);
         }
 
         if constexpr (BaseType::with_tracer_stabilization)
@@ -131,8 +125,7 @@ namespace Assembly
           tau_tracer          = sd.tau_supg_tracer[q];
 
           // Compute strong residual of the tracer equation
-          strong_residual_tracer =
-            dphidt + u_conv * grad_phi - sd.get_phase_diffusion(q) + source_phi;
+          strong_residual_tracer = CHNSEnergy::phase_residual<dim>(sd, q);
         }
 
         for (unsigned int i = 0; i < sd.dofs_per_cell; ++i)
@@ -310,11 +303,10 @@ namespace Assembly
         const auto u_dot_grad_u_ale = grad_u * u_conv;
 
         const auto  &p        = sd.present_pressure_values[q];
-        const auto  &grad_p   = sd.present_pressure_gradients[q];
+        [[maybe_unused]] const auto &grad_p = sd.present_pressure_gradients[q];
         const double source_p = sd.source_term_pressure[q];
 
         const auto phase_flux = sd.get_phase_flux(q);
-        const auto  &diffusive_flux = sd.diffusive_flux[q];
         const auto  &dphidt         = sd.tracer_time_derivatives[q];
         const auto  &phi            = sd.tracer_values[q];
         const auto  &grad_phi       = sd.tracer_gradients[q];
@@ -383,10 +375,7 @@ namespace Assembly
           // Compute strong residual of the momentum equation, in force units
           // (i.e. multiplied by the density); see the rhs assembler for the
           // corresponding test operators.
-          strong_residual_momentum =
-            rho * (dudt + grad_u * u_conv - body_force) + diffusive_flux +
-            phi * grad_mu + grad_p + source_u - eta * (lap_u + grad_div_u) -
-            2. * detadphi * (sym_grad_u * grad_phi);
+          strong_residual_momentum = CHNSEnergy::momentum_residual<dim>(sd, q);
 
           strong_residual_momentum_variation_phi_phi =
             to_mult_by_phi_u_i_phi_phi_j - detadphi * (lap_u + grad_div_u);
@@ -397,8 +386,7 @@ namespace Assembly
           tau_tracer          = sd.tau_supg_tracer[q];
 
           // Compute strong residual of the tracer equation
-          strong_residual_tracer =
-            dphidt + u_conv * grad_phi - sd.get_phase_diffusion(q) + source_phi;
+          strong_residual_tracer = CHNSEnergy::phase_residual<dim>(sd, q);
         }
 
         // Clipping phi makes the density constant outside [-1, 1].
