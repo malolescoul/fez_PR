@@ -49,8 +49,10 @@ void BDFErrorEstimator::advance(const TimeHandler &time_handler)
 void BDFErrorEstimator::rotate_additional_solution(
   const LA::ParVectorType &solution)
 {
-  // This reinits additional_solution the first time this function is called,
-  // thanks to the crafty operator= for PETSc vectors (petsc_vector.h).
+  // AMR can change ownership and ghosts without changing the global size.
+  // PETSc vector assignment only resizes on a global size change, so adopt
+  // the current partition explicitly before copying the history values.
+  additional_solution.reinit(solution, true);
   additional_solution = solution;
 }
 
