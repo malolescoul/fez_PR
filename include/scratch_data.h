@@ -1269,14 +1269,24 @@ namespace NavierStokesScratch
           // point. Use the gradients at the current point to compute tau.
           for (unsigned int k = 0; k < dofs_per_cell; ++k)
             grad_phi_u_first_component[k] = grad_phi_u[q][k][0];
-          tau_supg_velocity[q] = StabilizationTools::compute_tau_supg(
-            time_handler,
-            dofs_per_cell,
-            cell_diameter,
-            param.finite_elements.velocity_degree,
-            kinematic_viscosity,
-            u_conv,
-            grad_phi_u_first_component);
+          if constexpr (dim == 2)
+            tau_supg_velocity[q] = StabilizationTools::compute_tau_supg_2d(
+              time_handler,
+              param.finite_elements.velocity_degree,
+              kinematic_viscosity,
+              u_conv,
+              grad_phi_u_first_component,
+              fe_values_moving.inverse_jacobian(q),
+              fe_values_moving.get_fe().reference_cell().is_simplex());
+          else
+            tau_supg_velocity[q] = StabilizationTools::compute_tau_supg(
+              time_handler,
+              dofs_per_cell,
+              cell_diameter,
+              param.finite_elements.velocity_degree,
+              kinematic_viscosity,
+              u_conv,
+              grad_phi_u_first_component);
         }
 
 

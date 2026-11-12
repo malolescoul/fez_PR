@@ -101,6 +101,32 @@ namespace StabilizationTools
                    const double                       diffusivity,
                    const Tensor<1, dim>              &convective_velocity,
                    const std::vector<Tensor<1, dim>> &grad_scalar_shape);
+  /**
+   * Compute the 2D SUPG/PSPG parameter with separate convection and diffusion
+   * lengths. The convective frequency is p sum_i |u . grad phi_i|: this is
+   * 2 p ||u|| / h_conv without dividing by ||u||, including at zero velocity.
+   *
+   * For diffusion, use the smallest cell height, independently of the velocity.
+   * On triangles, its inverse is the largest norm of the physical barycentric
+   * gradients. On quadrilaterals, use the reference-coordinate gradients.
+   * With a non-affine mapping these define a local length at each quadrature
+   * point. Pass the inverse Jacobian of the current mapping, also in ALE.
+   *
+   * Keep the temporal term and polynomial-degree factors of compute_tau_supg().
+   */
+  inline double
+  compute_tau_supg_2d(const TimeHandler               &time_handler,
+                      const unsigned int               degree,
+                      const double                     diffusivity,
+                      const Tensor<1, 2>              &convective_velocity,
+                      const std::vector<Tensor<1, 2>> &grad_scalar_shape,
+                      const Tensor<2, 2>              &inverse_jacobian,
+                      const bool                       is_simplex);
+
+  /** Combine the squared convective and diffusive frequencies with 1/dt². */
+  inline double compute_tau_from_frequencies(const TimeHandler &time_handler,
+                                             const double convective_squared,
+                                             const double diffusive_squared);
 } // namespace StabilizationTools
 
 /* ---------------- Template functions ----------------- */
@@ -176,7 +202,45 @@ namespace StabilizationTools
     double diff = 4. * diffusivity * degree * degree * one_over_h_tau_squared;
     diff *= 9. * diff;
 
-    double tau = conv + diff;
+    return compute_tau_from_frequencies(time_handler, conv, diff);
+  }
+
+  inline double
+  compute_tau_supg_2d(const TimeHandler               &time_handler,
+                      const unsigned int               degree,
+                      const double                     diffusivity,
+                      const Tensor<1, 2>              &convective_velocity,
+                      const std::vector<Tensor<1, 2>> &grad_scalar_shape,
+                      const Tensor<2, 2>              &inverse_jacobian,
+                      const bool                       is_simplex)
+  {
+    double convective = 0.;
+    for (const auto &gradient : grad_scalar_shape)
+      convective += std::abs(convective_velocity * gradient);
+    convective *= degree;
+
+    // The rows of the inverse Jacobian are grad(xi) and grad(eta).
+    // A triangle also has the barycentric coordinate 1 - xi - eta.
+    double inverse_height_squared = std::max(inverse_jacobian[0].norm_square(),
+                                             inverse_jacobian[1].norm_square());
+    if (is_simplex)
+      inverse_height_squared =
+        std::max(inverse_height_squared,
+                 (inverse_jacobian[0] + inverse_jacobian[1]).norm_square());
+    Assert(inverse_height_squared > 0., ExcInternalError());
+
+    const double diffusive =
+      12. * diffusivity * degree * degree * inverse_height_squared;
+    return compute_tau_from_frequencies(time_handler,
+                                        convective * convective,
+                                        diffusive * diffusive);
+  }
+
+  inline double compute_tau_from_frequencies(const TimeHandler &time_handler,
+                                             const double convective_squared,
+                                             const double diffusive_squared)
+  {
+    double tau = convective_squared + diffusive_squared;
     if (!time_handler.is_steady())
     {
       const double unsteady = 1. / time_handler.get_current_timestep();
