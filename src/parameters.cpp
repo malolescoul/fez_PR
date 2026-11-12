@@ -1642,6 +1642,13 @@ namespace Parameters
                         "profile for transient "
                         "CHNS, CHNS-ALE and "
                         "enlarged CHNS-ALE.");
+      prm.declare_entry(
+        "enable flux correction",
+        "false",
+        Patterns::Bool(),
+        "Remove chemical diffusion along the weighted normal "
+        "of the reconstructed profile. Requires enable profile "
+        "correction; the profile-restoring flux is not projected.");
       prm.declare_entry("profile correction strength",
                         "0.6",
                         Patterns::Double(0.),
@@ -1753,6 +1760,9 @@ namespace Parameters
       epsilon_interface   = prm.get_double("interface thickness");
       with_tracer_limiter = prm.get_bool("enable tracer limiter");
       enable_profile_correction = prm.get_bool("enable profile correction");
+      enable_flux_correction    = prm.get_bool("enable flux correction");
+      AssertThrow(!enable_flux_correction || enable_profile_correction,
+                  ExcMessage("Flux correction requires profile correction."));
       profile_correction_strength =
         prm.get_double("profile correction strength");
       // moving-mesh forcing parameters

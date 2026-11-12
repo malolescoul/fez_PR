@@ -302,9 +302,27 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::MMSSourceTerm::
   if (cahn_hilliard_param.enable_profile_correction)
     correction = CahnHilliard::evaluate_profile_correction<dim>(
       phi, grad_phi, mms.exact_tracer->hessian(p), epsilon);
-  Tensor<1, dim> J_flux =
-    0.5 * (rho1 - rho0) *
-    (M * grad_mu + profile_correction_coefficient * correction.flux);
+  auto phase_flux =
+    M * grad_mu + profile_correction_coefficient * correction.flux;
+  double phase_diffusion =
+    M * mms.exact_potential->laplacian(p) + grad_M * grad_mu +
+    profile_correction_coefficient * correction.divergence;
+  if (cahn_hilliard_param.enable_flux_correction)
+  {
+    const CahnHilliard::FluxProjection<dim> projection(
+      phi,
+      grad_phi,
+      mms.exact_tracer->hessian(p),
+      grad_mu,
+      mms.exact_potential->hessian(p),
+      M,
+      grad_M,
+      epsilon,
+      true);
+    phase_flux += projection.flux;
+    phase_diffusion += projection.divergence;
+  }
+  Tensor<1, dim> J_flux      = 0.5 * (rho1 - rho0) * phase_flux;
   Tensor<1, dim> div_viscous = (eta * (lap_u + grad_div_u) +
                                 2. * detadphi * grad_phi * symmetrize(grad_u));
 
@@ -331,9 +349,7 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::MMSSourceTerm::
 
   // Tracer source term
   const double dphidt = mms.exact_tracer->time_derivative(p);
-  const double lap_mu = mms.exact_potential->laplacian(p);
-  values[phi_lower] = -(dphidt + u * grad_phi - M * lap_mu - grad_M * grad_mu -
-                        profile_correction_coefficient * correction.divergence);
+  values[phi_lower]   = -(dphidt + u * grad_phi - phase_diffusion);
 
   // Potential source term
   const double mu      = mms.exact_potential->value(p);

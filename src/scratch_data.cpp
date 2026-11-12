@@ -680,6 +680,12 @@ namespace NavierStokesScratch
         if (enable_tracer_stabilization)
           profile_correction_divergence.resize(n_q_points);
       }
+      if (param.cahn_hilliard.enable_flux_correction)
+      {
+        flux_projection.resize(n_q_points);
+        if (enable_tracer_stabilization)
+          flux_projection_divergence.resize(n_q_points);
+      }
       if (enable_tracer_stabilization &&
           (gradient_dependent_mobility ||
            param.cahn_hilliard.enable_profile_correction))
@@ -716,7 +722,7 @@ namespace NavierStokesScratch
       {
         potential_laplacians.resize(n_q_points);
         tau_supg_tracer.resize(n_q_points);
-        if constexpr (enable_pseudo_solid)
+        if (enable_pseudo_solid || param.cahn_hilliard.enable_flux_correction)
           potential_hessians.resize(n_q_points);
       }
 
