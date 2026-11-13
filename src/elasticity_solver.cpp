@@ -217,7 +217,8 @@ ElasticitySolver<dim>::ElasticitySolver(
 
   // Create direct solver
   direct_solver_reuse =
-    std::make_unique<PETScWrappers::SparseDirectMUMPSReuse>(solver_control);
+    std::make_unique<PETScWrappers::SparseDirectMUMPSReuse>(solver_control,
+                                                            mpi_communicator);
 
   scratch_data = std::make_unique<ScratchData>(
     *fe, *mapping, *quadrature, *face_quadrature, param, with_enlarged_psi);
@@ -250,7 +251,8 @@ void ElasticitySolver<dim>::reset()
 
   // Direct solver
   direct_solver_reuse =
-    std::make_unique<PETScWrappers::SparseDirectMUMPSReuse>(solver_control);
+    std::make_unique<PETScWrappers::SparseDirectMUMPSReuse>(solver_control,
+                                                            mpi_communicator);
 
   // Time handler (move assign a new time handler)
   time_handler = TimeHandler(param.time_integration);
@@ -623,43 +625,37 @@ void ElasticitySolver<dim>::solve_linear_system()
 {
   const auto &linear_solver_param = param.linear_solver.at(this->solver_type);
 
-  if (linear_solver_param.method ==
-      Parameters::LinearSolver::Method::direct_mumps)
+  switch (linear_solver_param.method)
   {
-    if (linear_solver_param.reuse)
-    {
-      solve_linear_system_direct(this,
+    case Parameters::LinearSolver::Method::direct_mumps:
+      LinearSolvers::solve_mumps(this,
                                  linear_solver_param,
                                  system_matrix,
                                  locally_owned_dofs,
                                  zero_constraints,
-                                 *direct_solver_reuse);
+                                 linear_solver_param.reuse ?
+                                   direct_solver_reuse.get() :
+                                   nullptr);
+      break;
+    case Parameters::LinearSolver::Method::cg:
+    {
+      // Match the upstream linear solver interface; keep a fresh CG
+      // preconditioner for each solve, as before this merge.
+      std::unique_ptr<PETScWrappers::PreconditionBase> preconditioner;
+      LinearSolvers::solve_cg(this,
+                              linear_solver_param,
+                              system_matrix,
+                              locally_owned_dofs,
+                              zero_constraints,
+                              preconditioner);
+      break;
     }
-    else
-      solve_linear_system_direct(this,
-                                 linear_solver_param,
-                                 system_matrix,
-                                 locally_owned_dofs,
-                                 zero_constraints);
-  }
-  else if (linear_solver_param.method == Parameters::LinearSolver::Method::cg)
-  {
-    solve_linear_system_cg(this,
-                           linear_solver_param,
-                           system_matrix,
-                           locally_owned_dofs,
-                           zero_constraints);
-  }
-  else if (linear_solver_param.method ==
-           Parameters::LinearSolver::Method::gmres)
-  {
-    AssertThrow(false,
-                ExcMessage("GMRES solver is not implemented for "
-                           "ElasticitySolver. Use CG unstead."));
-  }
-  else
-  {
-    AssertThrow(false, ExcMessage("No known resolution method"));
+    default:
+      AssertThrow(false,
+                  ExcMessage(
+                    "The chosen linear solver is not implemented for the "
+                    "ElasticitySolver. The only solvers currently available "
+                    "are Mumps and CG."));
   }
 }
 
