@@ -648,7 +648,8 @@ namespace Assembly
                                                       profile.inverse_gradient,
                                                     dH_inverse,
                                                     -grad_u_x_G_j,
-                                                    dH_velocity);
+                                                    dH_velocity,
+                                                    G);
               dcorrection_x =
                 sd.profile_coefficient[q].apply_variation(base_correction,
                                                           dcorrection_x,

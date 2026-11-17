@@ -17,7 +17,7 @@ namespace NavierStokesScratch
 
     if constexpr ((update_flags & cahn_hilliard) != 0)
       if (local_profile)
-        flags |= update_hessians;
+        flags |= update_hessians | update_inverse_jacobians;
 
     // Pseudo-solid: also update full Jacobian matrix
     if constexpr ((update_flags & pseudo_solid) != 0)

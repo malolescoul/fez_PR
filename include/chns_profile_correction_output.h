@@ -92,7 +92,8 @@ namespace CahnHilliard
       FEValues<dim> values(mapping,
                            cell->get_fe(),
                            Quadrature<dim>(points),
-                           update_values | update_gradients | update_hessians);
+                           update_values | update_gradients | update_hessians |
+                             update_inverse_jacobians);
       values.reinit(cell);
       Vector<double> nodal(cell->get_fe().n_dofs_per_cell());
       cell->get_dof_values(solution, nodal);
@@ -116,10 +117,15 @@ namespace CahnHilliard
           profile.inverse_gradient += nodal[j] * values[phase].gradient(j, q);
           profile.inverse_hessian += nodal[j] * values[phase].hessian(j, q);
         }
-        profile.value = std::tanh(inverse_value);
-        const auto geometric =
-          geometry ? geometry->evaluate(input.evaluation_points[q]) :
-                     CHNSProfileOverlap::PenaltyValue{};
+        profile.value  = std::tanh(inverse_value);
+        auto geometric = geometry ?
+                           geometry->evaluate(input.evaluation_points[q]) :
+                           CHNSProfileOverlap::PenaltyValue{};
+        if constexpr (dim == 2)
+          if (geometry && !geometry->reference_cells.empty())
+            geometric = geometry->evaluate_on_cell(cell->id().to_string(),
+                                                   {points[q][0], points[q][1]},
+                                                   values.inverse_jacobian(q));
         LocalProfileCoefficient<dim> coefficient(constant_coefficient);
         if (ch.local_profile_correction())
           coefficient =

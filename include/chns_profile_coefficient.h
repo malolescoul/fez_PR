@@ -122,10 +122,12 @@ namespace CahnHilliard
       }
     }
 
-    LocalProfileCoefficient variation(const dealii::Tensor<1, dim> &dw,
-                                      const dealii::Tensor<2, dim> &dH,
-                                      const dealii::Tensor<2, dim> &dU,
-                                      const dealii::Tensor<3, dim> &dV) const
+    LocalProfileCoefficient
+    variation(const dealii::Tensor<1, dim> &dw,
+              const dealii::Tensor<2, dim> &dH,
+              const dealii::Tensor<2, dim> &dU,
+              const dealii::Tensor<3, dim> &dV,
+              const dealii::Tensor<2, dim> &mesh_gradient = {}) const
     {
       LocalProfileCoefficient result;
       if (factor == 0.)
@@ -161,6 +163,12 @@ namespace CahnHilliard
           result.gradient[k] =
             geometric.feedback.multiplier * result.gradient[k] +
             result.value * geometric.feedback.gradient[k];
+        // Frozen scalar geometry is attached to the reference configuration.
+        // Its physical gradient changes when the current mesh changes.
+        for (unsigned k = 0; k < dim; ++k)
+          for (unsigned i = 0; i < dim; ++i)
+            result.gradient[k] -=
+              rate_value * mesh_gradient[i][k] * geometric.feedback.gradient[i];
         result.value *= geometric.feedback.multiplier;
       }
       // Geometry remains fixed; differentiate the local phase and velocity.
@@ -171,9 +179,12 @@ namespace CahnHilliard
                                       base_gradient[k],
                                       dbase,
                                       result.gradient[k]);
-        const auto                  limited = attenuate(b, k, dw, dH);
-        result.value                        = limited.v;
-        result.gradient[k]                  = limited.xv;
+        double                      dgeometric_gradient = 0.;
+        for (unsigned i = 0; i < dim; ++i)
+          dgeometric_gradient -= mesh_gradient[i][k] * geometric.gradient[i];
+        const auto limited = attenuate(b, k, dw, dH, dgeometric_gradient);
+        result.value       = limited.v;
+        result.gradient[k] = limited.xv;
       }
       return result;
     }
@@ -221,11 +232,14 @@ namespace CahnHilliard
     ProfileCoefficientJet attenuate(const ProfileCoefficientJet  &b,
                                     const unsigned                k,
                                     const dealii::Tensor<1, dim> &dw = {},
-                                    const dealii::Tensor<2, dim> &dH = {}) const
+                                    const dealii::Tensor<2, dim> &dH = {},
+                                    const double dgeometric_gradient = 0.) const
     {
       const auto geometric_limit =
-        b /
-        (1. + ProfileCoefficientJet(geometric.value, geometric.gradient[k]));
+        b / (1. + ProfileCoefficientJet(geometric.value,
+                                        geometric.gradient[k],
+                                        0.,
+                                        dgeometric_gradient));
       const auto compression = ratio_squared(k, dw, dH) - 1.;
       if (compression.f <= 0.)
         return geometric_limit;

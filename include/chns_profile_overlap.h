@@ -16,6 +16,7 @@ namespace CHNSProfileOverlap
   struct Point
   {
     double x = 0., y = 0.;
+    double &operator[](std::size_t i) { return i == 0 ? x : y; }
     double operator[](std::size_t i) const { return i == 0 ? x : y; }
   };
   inline Point add(Point a, Point b)

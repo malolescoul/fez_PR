@@ -71,12 +71,15 @@ K = K_width [1/(1+G) + (1 - 1/(1+G)) r]
 
 This preserves the validated recovery of useful correction on compressed profiles.
 The overlap range, natural-boundary reflection, beta and physical tail cutoff are
-unchanged. The model currently requires transient fixed-mesh 2D `incompressible_chns`,
-a Q1 tracer on axis-aligned rectangular cells, and positive constant mobility,
-surface tension and interface thickness. Manufactured sources for this model,
-3D, ALE, simplices and higher-order phase reconstruction are not implemented and
-are rejected explicitly. Tree-based AMR is supported. The existing solver restriction
-against combining checkpoint restart with tree-based AMR remains in place.
+unchanged. The model supports transient 2D `incompressible_chns`,
+`incompressible_chns_ale` and `incompressible_chns_ale_enlarged`, with a P1 tracer
+on triangles or a Q1 tracer on quadrilaterals. Position mappings may be linear or
+quadratic, including curved cells. Positive constant mobility, surface tension
+and interface thickness are required. Manufactured sources for this model, 3D,
+higher-order phase reconstruction and position mappings above degree two are
+rejected explicitly. Mesh adaptation remains subject to each solver's existing
+capabilities; the restriction against combining checkpoint restart with tree-based
+AMR remains in place.
 
 ### Newton and geometry
 
@@ -86,6 +89,25 @@ applied, preserving the exact timing of `v17_once`. This snapshot stays fixed du
 Newton and finite-difference Jacobian checks. The local phase and velocity dependence
 of K, its spatial gradient and the profile flux remain differentiated in the Jacobian.
 There is no geometric fixed-point loop or successive nonlinear solves.
+
+In ALE, the geometric snapshot is attached to the reference cells for the duration
+of the attempt. At reference point `xi`, a scalar geometric indicator is evaluated
+at `X_snapshot(xi)`. Its physical gradient is transformed by
+`J_current^{-T} J_snapshot^T`. Thus a mesh increment with physical gradient `G`
+contributes `-G^T grad(indicator)` to the linearization, while the indicator's
+scalar value remains frozen. These terms are included in the SUPG strong residual
+and its Jacobian. Phase and velocity remain implicit. Physical distances and
+interaction partners are recomputed at the next attempt; there is no within-step
+geometric iteration. This is a lagged geometric model, not an assertion that
+mesh motion leaves all local physical gradients unchanged.
+
+Width rays use the transported P1/Q1 phase in the physical isoparametric cell,
+with true cell containment rather than containment in its bounding box. The
+original axis-aligned fixed-mesh Q1 arithmetic is retained. Kernel reflection at
+straight natural boundaries uses their physical frame, including rotated rectangular
+domains; curved boundaries are not reflected through a fictitious chord plane.
+Enlarged ALE applies this correction to phi; the additional psi field does not
+replace phi in the profile reconstruction or the width measurements.
 
 Accepted-step exports use the same snapshot as the solve. Initial/restart output
 builds a snapshot when needed. AMR and rejected attempts rebuild geometry before
@@ -128,3 +150,23 @@ all of those direct comparisons. The narrow-film example retains pre-existing
 differences between serial and MPI diagnostics, and between uninterrupted BDF2
 and checkpoint restart (maximum phase difference about 9e-5). This integration
 does not change the time-history manager or claim to fix those baseline differences.
+
+The ALE extension adds checks for P1/Q1 interpolation on linear and quadratic
+position maps, actual triangle containment, small translated cells, rotated width
+measurements, and reflection at straight walls despite curved interior cells.
+Finite differences check the transport of nonzero overlap and width-feedback
+gradients, including the mesh contribution to the coefficient's spatial gradient.
+Volume and skin exports are checked on a displaced triangular mesh.
+
+Assembled ALE and enlarged-ALE Jacobians are checked on triangles with P2 mesh
+positions, all SUPG combinations, LB, and optional chemical flux projection.
+The complete matrix is checked on a profile with a resolved normal. The original
+polynomial case also checks the phase-equation rows, including its nearly constant
+cell: the existing LB stress is nonsmooth at zero phase gradient, so its momentum
+derivative there does not admit the same classical finite-difference check. This
+behavior is reproduced with correction disabled; neither LB nor the Jacobian
+test tolerances were changed for this extension.
+
+Short moving-film runs exercise nonzero overlap attenuation in both ALE solvers
+on 2 and 24 ranks. Active width feedback under mesh motion is checked separately
+by the coefficient derivative test; it is not activated in that short film fixture.

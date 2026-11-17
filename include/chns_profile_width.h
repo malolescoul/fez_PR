@@ -1,6 +1,7 @@
 #ifndef CHNS_PROFILE_WIDTH_H
 #define CHNS_PROFILE_WIDTH_H
 
+#include <chns_profile_mapping.h>
 #include <chns_profile_overlap.h>
 
 #include <cstdint>
@@ -98,10 +99,55 @@ namespace CHNSProfileWidth
   };
   struct Cell
   {
-    Point                 lower, upper;
-    std::array<double, 4> phase; // 00,10,01,11
-    double                evaluate(Point p, Point *gradient = nullptr) const
+    Point                        lower, upper;
+    std::array<double, 4>        phase; // 00,10,01,11
+    bool                         mapped = false;
+    CHNSProfileGeometry::CellMap mapping{};
+    Point                        position(Point unit) const
     {
+      return mapped ? mapping.evaluate(unit) :
+                      Point{lower.x + unit.x * (upper.x - lower.x),
+                            lower.y + unit.y * (upper.y - lower.y)};
+    }
+    bool contains(Point p) const
+    {
+      return mapped ? mapping.contains(p) :
+                      p.x >= lower.x && p.x <= upper.x && p.y >= lower.y &&
+                        p.y <= upper.y;
+    }
+    double evaluate(Point p, Point *gradient = nullptr) const
+    {
+      if (mapped)
+      {
+        Point u;
+        if (!mapping.inverse(p, u))
+          throw std::runtime_error(
+            "Profile width: inverse cell mapping failed");
+        const double x = u.x, y = u.y;
+        Point        g;
+        double       value;
+        if (mapping.simplex)
+        {
+          value = (1. - x - y) * phase[0] + x * phase[1] + y * phase[2];
+          g     = {phase[1] - phase[0], phase[2] - phase[0]};
+        }
+        else
+        {
+          value = (1 - x) * (1 - y) * phase[0] + x * (1 - y) * phase[1] +
+                  (1 - x) * y * phase[2] + x * y * phase[3];
+          g = {(1 - y) * (phase[1] - phase[0]) + y * (phase[3] - phase[2]),
+               (1 - x) * (phase[2] - phase[0]) + x * (phase[3] - phase[1])};
+        }
+        if (gradient)
+        {
+          std::array<Point, 2> J;
+          mapping.evaluate(u, &J);
+          const double det = CHNSProfileOverlap::cross(J[0], J[1]);
+          *gradient        = {(J[1].y * g.x - J[0].y * g.y) / det,
+                              (-J[1].x * g.x + J[0].x * g.y) / det};
+        }
+        return value;
+      }
       const double dx = upper.x - lower.x, dy = upper.y - lower.y;
       const double x = (p.x - lower.x) / dx, y = (p.y - lower.y) / dy;
       if (gradient)
@@ -250,6 +296,8 @@ namespace CHNSProfileWidth
       const auto i    = cell_tree.nearest(
         p,
         [&](auto k) {
+          if (cells[k].mapped)
+            return cells[k].contains(p) ? 0. : INFINITY;
           return box_distance(p, {cells[k].lower, cells[k].upper});
         },
         best);
@@ -277,15 +325,17 @@ namespace CHNSProfileWidth
         for (unsigned i = 0; i < 2; ++i)
           for (unsigned j = 0; j < 2; ++j)
           {
+            if (cell.mapped && cell.mapping.simplex && i + j >= 2)
+              continue;
             std::array<Point, 4> p;
             for (unsigned k = 0; k < 4; ++k)
-              p[k] = {cell.lower.x +
-                        (i + (k % 2)) * .5 * (cell.upper.x - cell.lower.x),
-                      cell.lower.y +
-                        (j + (k / 2)) * .5 * (cell.upper.y - cell.lower.y)};
+              p[k] = cell.position({(i + (k % 2)) * .5, (j + (k / 2)) * .5});
             for (const std::array<unsigned, 3> tri :
                  {std::array<unsigned, 3>{{0, 1, 2}}, {{1, 3, 2}}})
             {
+              if (cell.mapped && cell.mapping.simplex && i + j == 1 &&
+                  tri[0] == 1)
+                continue;
               std::array<double, 3> f;
               for (unsigned k = 0; k < 3; ++k)
                 f[k] = cell.evaluate(p[tri[k]]);
@@ -342,7 +392,7 @@ namespace CHNSProfileWidth
                   break;
                 const auto next =
                   subtract(midpoint, scale(normal, f0 / derivative));
-                if (box_distance(next, {cell.lower, cell.upper}) > 0.)
+                if (!cell.contains(next))
                   break;
                 midpoint = next;
               }
@@ -370,12 +420,53 @@ namespace CHNSProfileWidth
                     best     = point;
                   }
                 };
-                for (double y :
-                     {cell.lower.y, original_midpoint.y, cell.upper.y})
-                  root({cell.lower.x, y}, {cell.upper.x, y});
-                for (double x :
-                     {cell.lower.x, original_midpoint.x, cell.upper.x})
-                  root({x, cell.lower.y}, {x, cell.upper.y});
+                if (cell.mapped)
+                {
+                  // A root is linear in reference coordinates, including on
+                  // a curved physical edge. Project on reference cuts.
+                  Point u;
+                  if (!cell.mapping.inverse(original_midpoint, u))
+                    throw std::runtime_error(
+                      "Profile width anchor inverse failed");
+                  const auto reference_root = [&](Point lo, Point hi) {
+                    const double f = cell.evaluate(cell.position(lo));
+                    const double g = cell.evaluate(cell.position(hi));
+                    if ((f > 0. && g > 0.) || (f < 0. && g < 0.))
+                      return;
+                    const auto q = cell.position(add(
+                      lo,
+                      scale(subtract(hi, lo),
+                            f == g ? .5 : std::clamp(f / (f - g), 0., 1.))));
+                    const auto d = subtract(q, original_midpoint);
+                    if (dot(d, d) < closest2)
+                    {
+                      closest2 = dot(d, d);
+                      best     = q;
+                    }
+                  };
+                  if (cell.mapping.simplex)
+                  {
+                    reference_root({0., 0.}, {1., 0.});
+                    reference_root({0., 0.}, {0., 1.});
+                    reference_root({1., 0.}, {0., 1.});
+                  }
+                  else
+                  {
+                    for (double y : {0., u.y, 1.})
+                      reference_root({0., y}, {1., y});
+                    for (double x : {0., u.x, 1.})
+                      reference_root({x, 0.}, {x, 1.});
+                  }
+                }
+                else
+                {
+                  for (double y :
+                       {cell.lower.y, original_midpoint.y, cell.upper.y})
+                    root({cell.lower.x, y}, {cell.upper.x, y});
+                  for (double x :
+                       {cell.lower.x, original_midpoint.x, cell.upper.x})
+                    root({x, cell.lower.y}, {x, cell.upper.y});
+                }
                 if (!std::isfinite(closest2))
                   throw std::runtime_error("Local profile correction Q1 zero "
                                            "projection found no bracket");
@@ -441,8 +532,16 @@ namespace CHNSProfileWidth
           "Local profile correction epsilon must be positive");
       // Determinism independent of MPI ownership and repartitioning.
       std::sort(cells.begin(), cells.end(), [](const auto &a, const auto &b) {
-        return std::tie(a.lower.x, a.lower.y, a.upper.x, a.upper.y) <
-               std::tie(b.lower.x, b.lower.y, b.upper.x, b.upper.y);
+        const auto ka = std::tie(a.lower.x, a.lower.y, a.upper.x, a.upper.y);
+        const auto kb = std::tie(b.lower.x, b.lower.y, b.upper.x, b.upper.y);
+        if (ka != kb)
+          return ka < kb;
+        // Two triangles can share an AABB. Ownership must not break ties.
+        for (unsigned i = 0; i < a.mapping.nodes.size(); ++i)
+          for (unsigned d = 0; d < 2; ++d)
+            if (a.mapping.nodes[i][d] != b.mapping.nodes[i][d])
+              return a.mapping.nodes[i][d] < b.mapping.nodes[i][d];
+        return a.phase < b.phase;
       });
       std::vector<Box> boxes;
       for (const auto &c : cells)

@@ -7,6 +7,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 
 namespace CHNSProfileOverlap
@@ -20,9 +21,18 @@ namespace CHNSProfileOverlap
 
   struct ReflectingBox
   {
-    Point               lower, upper;
+    Point lower, upper;
+    Point axis{1., 0.}; // First axis of an orthonormal physical frame.
     std::array<bool, 2> reflect_lower{{false, false}},
       reflect_upper{{false, false}};
+    Point local(Point p) const
+    {
+      return {axis.x * p.x + axis.y * p.y, -axis.y * p.x + axis.x * p.y};
+    }
+    Point physical(Point p) const
+    {
+      return {axis.x * p.x - axis.y * p.y, axis.y * p.x + axis.x * p.y};
+    }
   };
 
   inline std::vector<MidlineSource>
@@ -30,6 +40,16 @@ namespace CHNSProfileOverlap
                  const ReflectingBox       &box,
                  const double               radius)
   {
+    if (!box.reflect_lower[0] && !box.reflect_lower[1] &&
+        !box.reflect_upper[0] && !box.reflect_upper[1])
+      return input;
+    const bool rotated = box.axis.x != 1. || box.axis.y != 0.;
+    if (rotated)
+      for (auto &s : input)
+      {
+        s.a = box.local(s.a);
+        s.b = box.local(s.b);
+      }
     for (unsigned axis = 0; axis < 2; ++axis)
     {
       if (!box.reflect_lower[axis] && !box.reflect_upper[axis])
@@ -83,6 +103,12 @@ namespace CHNSProfileOverlap
       }
       input = std::move(next);
     }
+    if (rotated)
+      for (auto &s : input)
+      {
+        s.a = box.physical(s.a);
+        s.b = box.physical(s.b);
+      }
     return input;
   }
 
@@ -250,6 +276,9 @@ namespace CHNSProfileGeometry
   {
     std::shared_ptr<const CHNSProfileOverlap::SmoothPenalty> overlap;
     std::shared_ptr<const CHNSProfileWidth::Geometry>        width;
+    // Empty on a fixed mesh. ALE fields are frozen on the attempt's reference
+    // configuration; their covectors follow the current physical mapping.
+    std::unordered_map<std::string, CellMap> reference_cells;
 
     template <typename PhysicalPoint>
     CHNSProfileOverlap::PenaltyValue evaluate(const PhysicalPoint &point) const
@@ -259,6 +288,30 @@ namespace CHNSProfileGeometry
         overlap ? overlap->evaluate(p) : CHNSProfileOverlap::PenaltyValue{};
       if (width)
         result.feedback = width->evaluate(p);
+      return result;
+    }
+
+    template <typename InverseJacobian>
+    CHNSProfileOverlap::PenaltyValue
+    evaluate_on_cell(const std::string              &id,
+                     const CHNSProfileOverlap::Point unit,
+                     const InverseJacobian          &inverse_current) const
+    {
+      const auto                              &map = reference_cells.at(id);
+      std::array<CHNSProfileOverlap::Point, 2> J;
+      auto       result    = evaluate(map.evaluate(unit, &J));
+      const auto transport = [&](CHNSProfileOverlap::Point gradient) {
+        const std::array<double, 2> reference{
+          {CHNSProfileOverlap::dot(J[0], gradient),
+           CHNSProfileOverlap::dot(J[1], gradient)}};
+        CHNSProfileOverlap::Point current;
+        for (unsigned i = 0; i < 2; ++i)
+          for (unsigned j = 0; j < 2; ++j)
+            current[i] += inverse_current[j][i] * reference[j];
+        return current;
+      };
+      result.gradient          = transport(result.gradient);
+      result.feedback.gradient = transport(result.feedback.gradient);
       return result;
     }
   };

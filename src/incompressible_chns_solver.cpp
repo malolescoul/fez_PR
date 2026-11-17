@@ -113,14 +113,13 @@ CHNSSolver<dim, with_moving_mesh, with_enlarged>::CHNSSolver(
   }
   if (param.cahn_hilliard.local_profile_correction())
   {
-    AssertThrow(dim == 2 && !with_moving_mesh,
+    AssertThrow(dim == 2,
                 ExcMessage(
                   "Local timescale profile correction currently requires "
-                  "the fixed-mesh 2D incompressible_chns solver."));
-    AssertThrow(param.finite_elements.use_quads &&
-                  param.finite_elements.tracer_degree == 1,
-                ExcMessage("Local timescale profile correction requires a Q1 "
-                           "tracer on axis-aligned rectangular cells."));
+                  "a 2D CHNS solver."));
+    AssertThrow(param.finite_elements.tracer_degree == 1,
+                ExcMessage("Local timescale profile correction requires a P1 "
+                           "or Q1 tracer."));
     AssertThrow(!param.mms_param.enable,
                 ExcMessage("Manufactured sources do not include the geometric "
                            "feedback of local timescale profile correction."));
@@ -504,7 +503,8 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::update_profile_geometry()
                                                 *this->moving_mapping,
                                                 *this->present_solution,
                                                 this->ordering->phi_lower,
-                                                this->param);
+                                                this->param,
+                                                with_moving_mesh);
   scratch_data->profile_geometry = profile_geometry;
 }
 

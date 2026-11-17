@@ -1265,9 +1265,7 @@ namespace NavierStokesScratch
               ch.mobility * (3. / (2. * std::sqrt(2.))) * ch.surface_tension /
                 epsilon,
               ch.profile_correction_timescale_factor,
-              profile_geometry ? profile_geometry->evaluate(
-                                   fe_values_moving.quadrature_point(q)) :
-                                 CHNSProfileOverlap::PenaltyValue{});
+              profile_geometric_values[q]);
           const auto scaled          = coefficient.apply(correction);
           profile_correction_flux[q] = scaled.flux;
           if (enable_tracer_stabilization)
@@ -1460,6 +1458,27 @@ namespace NavierStokesScratch
                                  exact_solution);
       if constexpr (enable_cahn_hilliard)
       {
+        if (param.cahn_hilliard.local_profile_correction())
+        {
+          profile_geometric_values.assign(n_q_points, {});
+          for (unsigned q = 0; q < n_q_points; ++q)
+            if (profile_geometry)
+            {
+              if constexpr (dim == 2)
+              {
+                if (!profile_geometry->reference_cells.empty())
+                {
+                  const auto p = active_fe_values->get_quadrature().point(q);
+                  profile_geometric_values[q] = profile_geometry->evaluate_on_cell(
+                    cell->id().to_string(), {p[0], p[1]},
+                    active_fe_values->inverse_jacobian(q));
+                  continue;
+                }
+              }
+              profile_geometric_values[q] = profile_geometry->evaluate(
+                active_fe_values->quadrature_point(q));
+            }
+        }
         if (param.cahn_hilliard.enable_profile_correction)
         {
           profile_dof_indices.resize(dofs_per_cell);
@@ -1872,6 +1891,7 @@ namespace NavierStokesScratch
     std::vector<CahnHilliard::ReconstructedProfile<dim>> reconstructed_profile;
     std::vector<CahnHilliard::LocalProfileCoefficient<dim>> profile_coefficient;
     std::shared_ptr<const CHNSProfileGeometry::Fields>      profile_geometry;
+    std::vector<CHNSProfileOverlap::PenaltyValue>           profile_geometric_values;
     std::vector<Tensor<1, dim>> profile_correction_flux;
     std::vector<double>         profile_correction_divergence;
     std::vector<Tensor<1, dim>> flux_projection;
