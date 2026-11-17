@@ -19,5 +19,5 @@ DEAL::invalid initial residual steady OK
 DEAL::invalid initial residual adaptive OK
 DEAL::invalid undamped update steady OK
 DEAL::invalid undamped update adaptive OK
-DEAL::fresh residual after fallback steady OK
-DEAL::fresh residual after fallback adaptive OK
+DEAL::reject trials above divergence limit steady OK
+DEAL::reject trials above divergence limit adaptive OK

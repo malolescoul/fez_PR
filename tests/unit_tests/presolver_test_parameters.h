@@ -54,7 +54,9 @@ subsection Nonlinear solver
  set verbosity = quiet
  set tolerance = 1e-9
  set max_iterations = 25
- set enable_line_search = true
+ subsection Line search
+   set enable = true
+ end
 end
 subsection Linear solver
  subsection main physics
