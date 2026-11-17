@@ -72,6 +72,9 @@ public:
    */
   virtual void run() override;
 
+  /// Refresh prescribed tracer values on each ALE trial geometry.
+  virtual void update_constraints_for_evaluation_point() override;
+
   /**
    * Update the mesh file for the current interval, and assigns the pointers to
    * the triangulation, dof_handler, solutions and metric field for this time

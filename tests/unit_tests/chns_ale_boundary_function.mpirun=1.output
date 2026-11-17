@@ -1,0 +1,10 @@
+
+DEAL::2D fixed tracer values, time and free fields OK
+DEAL::2D moving tracer values, time and free fields OK
+DEAL::3D fixed tracer values, time and free fields OK
+DEAL::3D moving tracer values, time and free fields OK
+DEAL::Initial ALE tracer geometry OK
+DEAL::Initial ALE tracer geometry OK
+DEAL::Newton tracer backtracking OK
+DEAL::Newton tracer restoration OK
+DEAL::Newton tracer backtracking OK

@@ -167,6 +167,12 @@ public:
   void distribute_nonzero_constraints();
 
   /**
+   * Refresh geometry-dependent boundary values before applying constraints
+   * to the current local evaluation point.
+   */
+  virtual void update_constraints_for_evaluation_point() {}
+
+  /**
    *
    */
   virtual void adapt_mesh();

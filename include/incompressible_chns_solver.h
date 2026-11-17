@@ -59,6 +59,9 @@ public:
    */
   virtual void set_solver_specific_exact_solution() override;
 
+  /// Update the time of prescribed tracer boundary functions.
+  virtual void set_solver_specific_time() override;
+
   virtual void create_solver_specific_zero_constraints() override;
   virtual void create_solver_specific_nonzero_constraints() override;
 

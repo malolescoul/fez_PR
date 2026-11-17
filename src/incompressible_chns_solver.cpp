@@ -273,6 +273,13 @@ void CHNSSolver<dim, with_moving_mesh>::setup_assemblers()
 }
 
 template <int dim, bool with_moving_mesh>
+void CHNSSolver<dim, with_moving_mesh>::set_solver_specific_time()
+{
+  for (auto &[id, bc] : this->param.cahn_hilliard_bc)
+    bc.set_time(this->time_handler.current_time);
+}
+
+template <int dim, bool with_moving_mesh>
 void CHNSSolver<dim,
                 with_moving_mesh>::create_solver_specific_zero_constraints()
 {
@@ -298,6 +305,14 @@ void CHNSSolver<dim,
                                                this->zero_constraints,
                                                potential_mask);
     }
+    if (bc.type == BoundaryConditions::Type::input_function)
+      VectorTools::interpolate_boundary_values(*this->moving_mapping,
+                                               *this->dof_handler,
+                                               id,
+                                               Functions::ZeroFunction<dim>(
+                                                 this->ordering->n_components),
+                                               this->zero_constraints,
+                                               tracer_mask);
   }
 }
 
@@ -325,6 +340,16 @@ void CHNSSolver<dim,
                                                this->nonzero_constraints,
                                                potential_mask);
     }
+    if (bc.type == BoundaryConditions::Type::input_function)
+      VectorTools::interpolate_boundary_values(
+        *this->moving_mapping,
+        *this->dof_handler,
+        id,
+        ScalarFunctionFromComponents<dim>(this->ordering->phi_lower,
+                                          this->ordering->n_components,
+                                          *bc.tracer),
+        this->nonzero_constraints,
+        tracer_mask);
   }
 }
 

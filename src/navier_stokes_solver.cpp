@@ -603,6 +603,34 @@ void NavierStokesSolver<dim, with_moving_mesh>::
 }
 
 template <int dim, bool with_moving_mesh>
+void NavierStokesSolver<dim, with_moving_mesh>::
+  update_constraints_for_evaluation_point()
+{
+  if constexpr (with_moving_mesh)
+  {
+    // Refresh trial-geometry boundary values only for the new prescribed phase
+    // path; other boundary types retain their existing update schedule.
+    if (!BoundaryConditions::has_boundary_condition(
+          param.cahn_hilliard_bc, BoundaryConditions::Type::input_function))
+      return;
+
+    // Position constraints use the fixed mapping and are already current.
+    // Reuse the last valid constraints: the preceding trial may be invalid.
+    nonzero_constraints.distribute(local_evaluation_point);
+    evaluation_point = local_evaluation_point;
+
+    // Let Newton reject invalid trials before evaluating boundary normals.
+    if (!evaluation_point_is_valid())
+      return;
+
+    // Rebuild all constraints on the resulting ALE mapping. In particular,
+    // input_function values must be evaluated at the deformed support points.
+    create_zero_constraints();
+    create_nonzero_constraints();
+  }
+}
+
+template <int dim, bool with_moving_mesh>
 void NavierStokesSolver<dim, with_moving_mesh>::create_base_constraints(
   const bool                 homogeneous,
   AffineConstraints<double> &constraints)
@@ -786,6 +814,16 @@ void NavierStokesSolver<dim, with_moving_mesh>::set_initial_conditions(
   // Set other solver-specific fields on moving mesh (e.g., CHNS tracer)
   set_solver_specific_initial_conditions();
 
+  // Apply position BC before evaluating tracer BC on the initial ALE geometry.
+  if constexpr (with_moving_mesh)
+    if (BoundaryConditions::has_boundary_condition(
+          param.cahn_hilliard_bc, BoundaryConditions::Type::input_function))
+    {
+      local_evaluation_point = newton_update;
+      update_constraints_for_evaluation_point();
+      newton_update = local_evaluation_point;
+    }
+
   // Apply non-homogeneous Dirichlet BC and set as current solution
   nonzero_constraints.distribute(newton_update);
   *present_solution = newton_update;
@@ -883,6 +921,13 @@ void NavierStokesSolver<dim, with_moving_mesh>::update_boundary_conditions()
   nonzero_constraints.distribute(local_evaluation_point);
   evaluation_point  = local_evaluation_point;
   *present_solution = local_evaluation_point;
+
+  // A failed Newton solve restores the accepted solution, but its homogeneous
+  // constraints may still describe a rejected trial. Refresh them before retry.
+  if constexpr (with_moving_mesh)
+    if (BoundaryConditions::has_boundary_condition(
+          param.cahn_hilliard_bc, BoundaryConditions::Type::input_function))
+      create_zero_constraints();
 }
 
 template <int dim, bool with_moving_mesh>

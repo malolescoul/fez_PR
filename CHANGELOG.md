@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/).
 Please use the tags "Added", "Changed" or "Fixed", depending on the nature of the changes.
 
+## [0.0.0] 2026-11-17
+
+### Added
+Prescribed tracer boundary values (`input_function`) for CHNS on fixed and moving meshes. Values follow the current time and ALE geometry, including initialization and Newton trial steps.
+
 ## [0.0.0] 2026-11-13
 
 ### Added
