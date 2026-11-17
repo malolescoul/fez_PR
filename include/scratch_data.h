@@ -3,6 +3,7 @@
 
 #include <cahn_hilliard.h>
 #include <chns_flux_correction.h>
+#include <chns_profile_coefficient.h>
 #include <components_ordering.h>
 #include <deal.II/base/quadrature.h>
 #include <deal.II/fe/fe_simplex_p.h>
@@ -284,6 +285,11 @@ namespace NavierStokesScratch
                                                    present_velocity_divergence);
       fe_values[pressure].get_function_values(current_solution,
                                               present_pressure_values);
+      if (enable_tracer_stabilization &&
+          param.cahn_hilliard.local_profile_correction() &&
+          !enable_stabilization)
+        fe_values[velocity].get_function_hessians(current_solution,
+                                                  present_velocity_hessians);
       if (enable_stabilization)
       {
         fe_values[velocity].get_function_laplacians(
@@ -1055,6 +1061,17 @@ namespace NavierStokesScratch
       return flux;
     }
 
+    bool local_profile_correction() const
+    {
+      return param.cahn_hilliard.local_profile_correction();
+    }
+
+    Tensor<3, dim> velocity_shape_hessian(const unsigned int q,
+                                          const unsigned int j) const
+    {
+      return (*active_fe_values)[velocity].hessian(j, q);
+    }
+
     Tensor<2, dim> potential_shape_hessian(const unsigned int q,
                                            const unsigned int j) const
     {
@@ -1186,7 +1203,8 @@ namespace NavierStokesScratch
           // Shape functions on moving mesh
           shape_phi[q][k]      = fe_values_moving[tracer].value(k, q);
           grad_shape_phi[q][k] = fe_values_moving[tracer].gradient(k, q);
-          if (((gradient_dependent_mobility ||
+          if (param.cahn_hilliard.local_profile_correction() ||
+              ((gradient_dependent_mobility ||
                 param.cahn_hilliard.enable_profile_correction) &&
                enable_tracer_stabilization) ||
               (laplace_beltrami && enable_stabilization))
@@ -1221,7 +1239,8 @@ namespace NavierStokesScratch
               const double nodal = profile_nodal_inverse[k].value;
               inverse_value += nodal * shape_phi[q][k];
               profile.inverse_gradient += nodal * grad_shape_phi[q][k];
-              if (enable_tracer_stabilization)
+              if (enable_tracer_stabilization ||
+                  param.cahn_hilliard.local_profile_correction())
                 profile.inverse_hessian += nodal * hessian_shape_phi[q][k];
             }
           profile.value         = std::tanh(inverse_value);
@@ -1231,11 +1250,28 @@ namespace NavierStokesScratch
             enable_tracer_stabilization ? profile.hessian() : Tensor<2, dim>(),
             epsilon,
             enable_tracer_stabilization);
-          profile_correction_flux[q] =
-            profile_correction_coefficient * correction.flux;
+          auto &coefficient = profile_coefficient[q];
+          coefficient       = CahnHilliard::LocalProfileCoefficient<dim>(
+            profile_correction_coefficient);
+          const auto &ch = param.cahn_hilliard;
+          if (ch.local_profile_correction())
+            coefficient = CahnHilliard::LocalProfileCoefficient<dim>(
+              profile.inverse_gradient,
+              profile.inverse_hessian,
+              present_velocity_gradients[q],
+              enable_tracer_stabilization ? present_velocity_hessians[q] :
+                                            Tensor<3, dim>(),
+              epsilon,
+              ch.mobility * (3. / (2. * std::sqrt(2.))) * ch.surface_tension /
+                epsilon,
+              ch.profile_correction_timescale_factor,
+              profile_geometry ? profile_geometry->evaluate(
+                                   fe_values_moving.quadrature_point(q)) :
+                                 CHNSProfileOverlap::PenaltyValue{});
+          const auto scaled          = coefficient.apply(correction);
+          profile_correction_flux[q] = scaled.flux;
           if (enable_tracer_stabilization)
-            profile_correction_divergence[q] =
-              profile_correction_coefficient * correction.divergence;
+            profile_correction_divergence[q] = scaled.divergence;
         }
 
         // Time derivatives
@@ -1834,6 +1870,8 @@ namespace NavierStokesScratch
     std::vector<types::global_dof_index>      profile_dof_indices;
     std::vector<CahnHilliard::ProfileInverse> profile_nodal_inverse;
     std::vector<CahnHilliard::ReconstructedProfile<dim>> reconstructed_profile;
+    std::vector<CahnHilliard::LocalProfileCoefficient<dim>> profile_coefficient;
+    std::shared_ptr<const CHNSProfileGeometry::Fields>      profile_geometry;
     std::vector<Tensor<1, dim>> profile_correction_flux;
     std::vector<double>         profile_correction_divergence;
     std::vector<Tensor<1, dim>> flux_projection;

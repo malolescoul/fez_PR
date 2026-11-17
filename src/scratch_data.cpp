@@ -8,11 +8,16 @@ namespace NavierStokesScratch
    * Get the update flags for the FEValues, depending on the enabled features.
    */
   template <unsigned int update_flags>
-  UpdateFlags get_cell_update_flags(const bool enable_stabilization)
+  UpdateFlags get_cell_update_flags(const bool enable_stabilization,
+                                    const bool local_profile = false)
   {
     // Flags for Navier-Stokes on fixed mesh only
     UpdateFlags flags = update_values | update_gradients |
                         update_quadrature_points | update_JxW_values;
+
+    if constexpr ((update_flags & cahn_hilliard) != 0)
+      if (local_profile)
+        flags |= update_hessians;
 
     // Pseudo-solid: also update full Jacobian matrix
     if constexpr ((update_flags & pseudo_solid) != 0)
@@ -72,14 +77,16 @@ namespace NavierStokesScratch
         moving_mapping,
         fe,
         cell_quadrature,
-        get_cell_update_flags<update_flags>(enable_stabilization ||
-                                            enable_tracer_stabilization)))
+        get_cell_update_flags<update_flags>(
+          enable_stabilization || enable_tracer_stabilization,
+          param.cahn_hilliard.local_profile_correction())))
     , fe_values_fixed(std::make_unique<FEValues<dim>>(
         fixed_mapping,
         fe,
         cell_quadrature,
-        get_cell_update_flags<update_flags>(enable_stabilization ||
-                                            enable_tracer_stabilization)))
+        get_cell_update_flags<update_flags>(
+          enable_stabilization || enable_tracer_stabilization,
+          param.cahn_hilliard.local_profile_correction())))
     , fe_face_values(std::make_unique<FEFaceValues<dim>>(
         moving_mapping,
         fe,
@@ -143,14 +150,16 @@ namespace NavierStokesScratch
         moving_mapping_collection,
         fe_collection,
         cell_quadrature_collection,
-        get_cell_update_flags<update_flags>(enable_stabilization ||
-                                            enable_tracer_stabilization)))
+        get_cell_update_flags<update_flags>(
+          enable_stabilization || enable_tracer_stabilization,
+          param.cahn_hilliard.local_profile_correction())))
     , hp_fe_values_fixed(std::make_unique<hp::FEValues<dim>>(
         fixed_mapping_collection,
         fe_collection,
         cell_quadrature_collection,
-        get_cell_update_flags<update_flags>(enable_stabilization ||
-                                            enable_tracer_stabilization)))
+        get_cell_update_flags<update_flags>(
+          enable_stabilization || enable_tracer_stabilization,
+          param.cahn_hilliard.local_profile_correction())))
     , hp_fe_face_values(std::make_unique<hp::FEFaceValues<dim>>(
         moving_mapping_collection,
         fe_collection,
@@ -239,6 +248,7 @@ namespace NavierStokesScratch
     , time_handler(other.time_handler)
   {
     profile_correction_coefficient = other.profile_correction_coefficient;
+    profile_geometry               = other.profile_geometry;
     if constexpr (has_hp_capabilities)
     {
       hp_fe_values = std::make_unique<hp::FEValues<dim>>(
@@ -690,6 +700,7 @@ namespace NavierStokesScratch
         profile_dof_indices.resize(max_dofs_per_cell);
         profile_nodal_inverse.resize(max_dofs_per_cell);
         reconstructed_profile.resize(n_q_points);
+        profile_coefficient.resize(n_q_points);
         profile_correction_flux.resize(n_q_points);
         if (enable_tracer_stabilization)
           profile_correction_divergence.resize(n_q_points);
@@ -700,7 +711,8 @@ namespace NavierStokesScratch
         if (enable_tracer_stabilization)
           flux_projection_divergence.resize(n_q_points);
       }
-      if ((enable_tracer_stabilization &&
+      if (param.cahn_hilliard.local_profile_correction() ||
+          (enable_tracer_stabilization &&
            (gradient_dependent_mobility ||
             param.cahn_hilliard.enable_profile_correction)) ||
           (laplace_beltrami && enable_stabilization))

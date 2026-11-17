@@ -67,6 +67,12 @@ public:
   // Update time-dependent prescribed phase boundary functions.
   virtual void set_solver_specific_time() override;
   virtual void prepare_timestep() override;
+  virtual void add_solver_specific_postprocessing_data() override;
+
+  /** Rebuild geometry once per attempt from the previous state with the
+   * current prescribed boundary values already applied, as in v17_once.
+   */
+  void update_profile_geometry();
 
   /** Global correction amplitude from the Newton state, or the exact MMS state.
    * Kept constant during cell Jacobian assembly and diagnostic perturbations.
@@ -156,6 +162,7 @@ protected:
     const_ordering = {};
 
   std::unique_ptr<ScratchData> scratch_data;
+  std::shared_ptr<const CHNSProfileGeometry::Fields> profile_geometry;
 
   std::vector<std::unique_ptr<Assembler>> assemblers;
 

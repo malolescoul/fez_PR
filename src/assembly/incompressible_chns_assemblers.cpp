@@ -401,8 +401,9 @@ namespace Assembly
           sd.tracer_limiter(phi) != phi ? 0. : dinvrho_dphi;
 
         CahnHilliard::ProfileCorrectionLinearization<dim> correction;
+        CahnHilliard::ProfileCorrection<dim>              base_correction;
         if (!sd.profile_correction_flux.empty())
-          CahnHilliard::evaluate_profile_correction(
+          base_correction = CahnHilliard::evaluate_profile_correction(
             sd.reconstructed_profile[q].value,
             sd.reconstructed_profile[q].gradient(),
             BaseType::with_tracer_stabilization ?
@@ -456,8 +457,21 @@ namespace Assembly
             dcorrection = correction.variation(dprofile.value,
                                                dprofile.gradient,
                                                dprofile.hessian);
-            dcorrection.flux *= sd.profile_correction_coefficient;
-            dcorrection.divergence *= sd.profile_correction_coefficient;
+            const auto dcoefficient = sd.profile_coefficient[q].variation(
+              inverse_derivative * grad_phi_phi[j],
+              (BaseType::with_tracer_stabilization ||
+               sd.local_profile_correction()) ?
+                inverse_derivative * sd.hessian_shape_phi[q][j] :
+                Tensor<2, dim>(),
+              grad_phi_u_j,
+              BaseType::with_tracer_stabilization &&
+                  sd.local_profile_correction() ?
+                sd.velocity_shape_hessian(q, j) :
+                Tensor<3, dim>());
+            dcorrection =
+              sd.profile_coefficient[q].apply_variation(base_correction,
+                                                        dcorrection,
+                                                        dcoefficient);
             if (!sd.flux_projection.empty())
             {
               const auto projected =
@@ -608,8 +622,37 @@ namespace Assembly
               dcorrection_x = correction.variation(0.,
                                                    -transpose_G * grad_profile,
                                                    dhess_profile);
-              dcorrection_x.flux *= sd.profile_correction_coefficient;
-              dcorrection_x.divergence *= sd.profile_correction_coefficient;
+              Tensor<2, dim> dH_inverse;
+              Tensor<3, dim> dH_velocity;
+              if constexpr (BaseType::with_tracer_stabilization)
+                if (sd.local_profile_correction())
+                {
+                  const auto &H = profile.inverse_hessian;
+                  const auto &K = (*hessian_phi_x_moving)[j];
+                  dH_inverse    = -(transpose_G * H + H * G);
+                  for (unsigned a = 0; a < dim; ++a)
+                    for (unsigned b = 0; b < dim; ++b)
+                      for (unsigned c = 0; c < dim; ++c)
+                      {
+                        dH_inverse[a][b] -=
+                          profile.inverse_gradient[c] * K[c][a][b];
+                        for (unsigned l = 0; l < dim; ++l)
+                          dH_velocity[l][a][b] -=
+                            G[c][a] * sd.present_velocity_hessians[q][l][c][b] +
+                            sd.present_velocity_hessians[q][l][a][c] * G[c][b] +
+                            grad_u[l][c] * K[c][a][b];
+                      }
+                }
+              const auto dcoefficient =
+                sd.profile_coefficient[q].variation(-transpose_G *
+                                                      profile.inverse_gradient,
+                                                    dH_inverse,
+                                                    -grad_u_x_G_j,
+                                                    dH_velocity);
+              dcorrection_x =
+                sd.profile_coefficient[q].apply_variation(base_correction,
+                                                          dcorrection_x,
+                                                          dcoefficient);
               if (!sd.flux_projection.empty())
               {
                 Tensor<2, dim> dhess_mu;

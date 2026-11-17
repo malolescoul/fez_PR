@@ -410,6 +410,7 @@ namespace Parameters
 
     // CHNS capillary force density -phi grad(mu): visualization and integrals.
     PostProcessingFile surface_tension_force;
+    bool               export_profile_correction = false;
 
     /**
      * A base struct for postprocessing tools which produce a field, which is
@@ -877,6 +878,20 @@ namespace Parameters
     bool   enable_profile_correction   = false;
     bool   enable_flux_correction               = false;
     double profile_correction_strength = 0.6;
+    enum class ProfileCorrectionModel
+    {
+      constant,
+      local_timescale
+    };
+    ProfileCorrectionModel profile_correction_model =
+      ProfileCorrectionModel::constant;
+    double profile_correction_timescale_factor = 50.;
+    bool   local_profile_correction() const
+    {
+      return enable_profile_correction &&
+             profile_correction_model ==
+               ProfileCorrectionModel::local_timescale;
+    }
 
     // Mesh forcing parameters control the source term in the pseudosolid
     // equation of CHNS-ALE. Explicit names now distinguish the two factors.

@@ -78,8 +78,10 @@ subsection Physical properties
 end
 
 subsection Cahn Hilliard
-  set enable profile correction   = true
-  set profile correction strength = 0.6
+  subsection profile correction
+    set enable profile correction   = true
+    set profile correction strength = 0.6
+  end
 
   subsection mobility
     set model                   = Adaptive normal velocity

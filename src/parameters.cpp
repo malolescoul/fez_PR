@@ -635,6 +635,12 @@ namespace Parameters
       declare_postprocessing_file(prm);
       prm.set("output prefix", "chns_stabilization_energy");
       prm.leave_subsection();
+      prm.enter_subsection("profile correction");
+      prm.declare_entry("enable",
+                        "false",
+                        Patterns::Bool(),
+                        "Export the profile correction amplitude and flux.");
+      prm.leave_subsection();
       prm.enter_subsection("surface tension force");
       declare_postprocessing_file(prm);
       prm.set("output prefix", "surface_tension_force");
@@ -813,6 +819,9 @@ namespace Parameters
       prm.leave_subsection();
       prm.enter_subsection("chns stabilization energy");
       read_postprocessing_file(prm, chns_stabilization_energy);
+      prm.leave_subsection();
+      prm.enter_subsection("profile correction");
+      export_profile_correction = prm.get_bool("enable");
       prm.leave_subsection();
       prm.enter_subsection("surface tension force");
       read_postprocessing_file(prm, surface_tension_force);
@@ -1743,13 +1752,34 @@ namespace Parameters
                         "false",
                         Patterns::Bool(),
                         "Enable limiter for the tracer (phase field marker)");
-      prm.declare_entry("enable profile correction",
-                        "false",
-                        Patterns::Bool(),
-                        "Implicit correction of the nodally reconstructed "
-                        "profile for transient "
-                        "CHNS, CHNS-ALE and "
-                        "enlarged CHNS-ALE.");
+      prm.enter_subsection("profile correction");
+      {
+        prm.declare_entry("enable profile correction",
+                          "false",
+                          Patterns::Bool(),
+                          "Implicit correction of the nodally reconstructed "
+                          "profile for transient "
+                          "CHNS, CHNS-ALE and "
+                          "enlarged CHNS-ALE.");
+        prm.declare_entry("profile correction strength",
+                          "0.6",
+                          Patterns::Double(0.),
+                          "Multiplier of 2*M_max*sigma_tilde/epsilon in the "
+                          "profile correction flux.");
+        prm.declare_entry(
+          "profile correction model",
+          "constant",
+          Patterns::Selection("constant|local timescale"),
+          "Historical constant amplitude or local timescale law "
+          "with overlap attenuation and profile-width feedback.");
+        prm.declare_entry(
+          "profile correction timescale factor",
+          "50",
+          Patterns::Double(0.),
+          "Dimensionless factor C for local timescale correction; "
+          "profile correction strength is ignored in this model.");
+      }
+      prm.leave_subsection();
       prm.declare_entry(
         "enable flux correction",
         "false",
@@ -1757,11 +1787,6 @@ namespace Parameters
         "Remove chemical diffusion along the weighted normal "
         "of the reconstructed profile. Requires enable profile "
         "correction; the profile-restoring flux is not projected.");
-      prm.declare_entry("profile correction strength",
-                        "0.6",
-                        Patterns::Double(0.),
-                        "Multiplier of 2*M_max*sigma_tilde/epsilon in the "
-                        "profile correction flux.");
       // Moving-mesh forcing parameters
       prm.declare_entry(
         "mff source term",
@@ -1871,12 +1896,29 @@ namespace Parameters
       surface_tension     = prm.get_double("surface tension");
       epsilon_interface   = prm.get_double("interface thickness");
       with_tracer_limiter = prm.get_bool("enable tracer limiter");
-      enable_profile_correction = prm.get_bool("enable profile correction");
-      enable_flux_correction    = prm.get_bool("enable flux correction");
+      prm.enter_subsection("profile correction");
+      {
+        enable_profile_correction = prm.get_bool("enable profile correction");
+        profile_correction_strength =
+          prm.get_double("profile correction strength");
+        profile_correction_model =
+          prm.get("profile correction model") == "local timescale" ?
+            ProfileCorrectionModel::local_timescale :
+            ProfileCorrectionModel::constant;
+        profile_correction_timescale_factor =
+          prm.get_double("profile correction timescale factor");
+      }
+      prm.leave_subsection();
+      enable_flux_correction = prm.get_bool("enable flux correction");
       AssertThrow(!enable_flux_correction || enable_profile_correction,
                   ExcMessage("Flux correction requires profile correction."));
-      profile_correction_strength =
-        prm.get_double("profile correction strength");
+      if (local_profile_correction())
+        AssertThrow(
+          mobility_model == MobilityModel::constant && mobility > 0. &&
+            surface_tension > 0. && epsilon_interface > 0.,
+          ExcMessage(
+            "Local timescale profile correction requires constant "
+            "positive mobility, surface tension and interface thickness."));
       // moving-mesh forcing parameters
       const std::string parsed_mff_source_term = prm.get("mff source term");
       if (parsed_mff_source_term == "chns form")

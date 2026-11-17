@@ -1,6 +1,7 @@
 #include <assembly/elasticity_assemblers.h>
 #include <assembly/incompressible_chns_assemblers.h>
 #include <chns_energy_diagnostics.h>
+#include <chns_profile_geometry_builder.h>
 #include <compare_matrix.h>
 #include <deal.II/base/multithread_info.h>
 #include <deal.II/base/work_stream.h>
@@ -109,6 +110,20 @@ CHNSSolver<dim, with_moving_mesh, with_enlarged>::CHNSSolver(
                   param.cahn_hilliard.surface_tension > 0.,
                 ExcMessage("Profile correction requires positive interface "
                            "thickness and surface tension."));
+  }
+  if (param.cahn_hilliard.local_profile_correction())
+  {
+    AssertThrow(dim == 2 && !with_moving_mesh,
+                ExcMessage(
+                  "Local timescale profile correction currently requires "
+                  "the fixed-mesh 2D incompressible_chns solver."));
+    AssertThrow(param.finite_elements.use_quads &&
+                  param.finite_elements.tracer_degree == 1,
+                ExcMessage("Local timescale profile correction requires a Q1 "
+                           "tracer on axis-aligned rectangular cells."));
+    AssertThrow(!param.mms_param.enable,
+                ExcMessage("Manufactured sources do not include the geometric "
+                           "feedback of local timescale profile correction."));
   }
   if constexpr (with_enlarged)
   {
@@ -441,6 +456,8 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::create_scratch_data()
                                                *this->face_quadrature,
                                                this->time_handler,
                                                this->param);
+  // A new mesh or time interval invalidates the old geometric snapshot.
+  profile_geometry.reset();
 }
 
 template <int dim, bool with_moving_mesh, bool with_enlarged>
@@ -465,6 +482,7 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::setup_assemblers()
 template <int dim, bool with_moving_mesh, bool with_enlarged>
 void CHNSSolver<dim, with_moving_mesh, with_enlarged>::prepare_timestep()
 {
+  update_profile_geometry();
   if (this->param.cahn_hilliard.enable_profile_correction &&
       this->param.mms_param.enable)
   {
@@ -478,6 +496,33 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::prepare_timestep()
 }
 
 template <int dim, bool with_moving_mesh, bool with_enlarged>
+void CHNSSolver<dim, with_moving_mesh, with_enlarged>::update_profile_geometry()
+{
+  if (!this->param.cahn_hilliard.local_profile_correction())
+    return;
+  profile_geometry = CHNSProfileGeometry::build(*this->dof_handler,
+                                                *this->moving_mapping,
+                                                *this->present_solution,
+                                                this->ordering->phi_lower,
+                                                this->param);
+  scratch_data->profile_geometry = profile_geometry;
+}
+
+template <int dim, bool with_moving_mesh, bool with_enlarged>
+void CHNSSolver<dim, with_moving_mesh, with_enlarged>::
+  add_solver_specific_postprocessing_data()
+{
+  // Initial/restart output needs a snapshot; accepted-step output retains
+  // exactly the geometry used by the solve.
+  if (this->param.cahn_hilliard.local_profile_correction() &&
+      (this->time_handler.current_time_iteration == 0 || !profile_geometry))
+    update_profile_geometry();
+  if (this->param.postprocessing.export_profile_correction)
+    this->postproc_handler->set_profile_correction_data(
+      profile_geometry, compute_profile_correction_coefficient(false, true));
+}
+
+template <int dim, bool with_moving_mesh, bool with_enlarged>
 double CHNSSolver<dim, with_moving_mesh, with_enlarged>::
   compute_profile_correction_coefficient(const bool manufactured,
                                          const bool postprocessing) const
@@ -485,6 +530,10 @@ double CHNSSolver<dim, with_moving_mesh, with_enlarged>::
   const auto &ch = this->param.cahn_hilliard;
   if (!ch.enable_profile_correction)
     return 0.;
+  if (ch.local_profile_correction())
+    return ch.profile_correction_timescale_factor * ch.mobility *
+           (3. / (2. * std::sqrt(2.))) * ch.surface_tension /
+           ch.epsilon_interface;
   double maximum = ch.mobility;
   if (ch.mobility_model !=
       Parameters::CahnHilliard<dim>::MobilityModel::constant)

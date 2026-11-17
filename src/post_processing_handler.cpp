@@ -100,6 +100,11 @@ PostProcessingHandler<dim>::PostProcessingHandler(
     const auto &pp = param.postprocessing;
     using PP       = Parameters::PostProcessing;
 
+    AssertThrow(
+      !pp.export_profile_correction ||
+        (ordering.has_variable(SolverInfo::VariableType::phase_tracer) &&
+         ordering.has_variable(SolverInfo::VariableType::velocity)),
+      ExcMessage("Profile correction output requires a CHNS solver."));
     postprocessors.clear();
     const bool geometric =
       param.cahn_hilliard.surface_tension_representation ==

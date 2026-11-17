@@ -3,6 +3,7 @@
 
 #include <chns_capillary_projection.h>
 #include <chns_energy.h>
+#include <chns_profile_correction_output.h>
 #include <components_ordering.h>
 #include <deal.II/base/table_handler.h>
 #include <deal.II/base/timer.h>
@@ -314,6 +315,14 @@ public:
                                      const VectorType      &solution,
                                      const TimeHandler     &time);
 
+  void set_profile_correction_data(
+    std::shared_ptr<const CHNSProfileGeometry::Fields> geometry,
+    const double                                       coefficient)
+  {
+    profile_geometry               = std::move(geometry);
+    profile_correction_coefficient = coefficient;
+  }
+
   void clear();
 
   /**
@@ -536,6 +545,8 @@ private:
                                              const TimeHandler    &time);
   const Parameters::CahnHilliard<dim> &cahn_hilliard_param;
   std::unique_ptr<CHNSSurfaceTension::WeakForceProjection<dim>> geometric_force;
+  std::shared_ptr<const CHNSProfileGeometry::Fields> profile_geometry;
+  double       profile_correction_coefficient = 0.;
   TableHandler surface_tension_force_table;
   unsigned int surface_tension_force_last_iteration =
     numbers::invalid_unsigned_int;
@@ -791,6 +802,22 @@ void PostProcessingHandler<dim>::output_volume_fields(
   for (const auto &postprocessor : postprocessors)
     data_out->add_data_vector(solution, *postprocessor);
 
+  std::unique_ptr<CahnHilliard::ProfileCorrectionOutput<dim, VectorType>>
+    profile_output;
+  if (post_proc_param.export_profile_correction)
+  {
+    profile_output =
+      std::make_unique<CahnHilliard::ProfileCorrectionOutput<dim, VectorType>>(
+        cahn_hilliard_param,
+        mapping,
+        solution,
+        ordering.phi_lower,
+        ordering.u_lower,
+        profile_geometry,
+        profile_correction_coefficient);
+    data_out->add_data_vector(solution, *profile_output);
+  }
+
   if (geometric_force)
     geometric_force->add_data(*data_out);
   data_out->build_patches(mapping,
@@ -882,6 +909,22 @@ void PostProcessingHandler<dim>::output_skin_fields(
                                    "slice_index",
                                    DataOutFaces<dim>::type_cell_data);
   }
+  std::unique_ptr<CahnHilliard::ProfileCorrectionOutput<dim, VectorType>>
+    profile_output;
+  if (post_proc_param.export_profile_correction)
+  {
+    profile_output =
+      std::make_unique<CahnHilliard::ProfileCorrectionOutput<dim, VectorType>>(
+        cahn_hilliard_param,
+        mapping,
+        solution,
+        ordering.phi_lower,
+        ordering.u_lower,
+        profile_geometry,
+        profile_correction_coefficient);
+    data_out_skin->add_data_vector(solution, *profile_output);
+  }
+
   if (geometric_force)
     geometric_force->add_data(*data_out_skin);
   data_out_skin->build_patches(mapping, output_param.n_subdivisions);
