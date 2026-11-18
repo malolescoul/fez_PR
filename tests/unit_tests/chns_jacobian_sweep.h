@@ -35,6 +35,26 @@ public:
       if (cell->is_locally_owned())
       {
         this->assemble_local_matrix(cell, scratch, copy);
+        if (this->param.cahn_hilliard.enable_profile_correction &&
+            !scratch.local_profile_correction())
+          for (unsigned q = 0; q < scratch.n_q_points; ++q)
+          {
+            const auto expected = scratch.profile_coefficient[q].apply(
+              CahnHilliard::evaluate_profile_correction<2>(
+                scratch.tracer_values[q], scratch.tracer_gradients[q],
+                scratch.enable_tracer_stabilization ? scratch.tracer_hessians[q] :
+                                                       Tensor<2, 2>(),
+                scratch.epsilon, scratch.enable_tracer_stabilization,
+                nullptr, false));
+            AssertThrow((scratch.profile_correction_flux[q] - expected.flux).norm() <
+                          1e-12 * (1. + expected.flux.norm()),
+                        ExcMessage("Constant correction must use transported phi_h"));
+            if (scratch.enable_tracer_stabilization)
+              AssertThrow(std::abs(scratch.profile_correction_divergence[q] -
+                                   expected.divergence) <
+                            1e-12 * (1. + std::abs(expected.divergence)),
+                          ExcMessage("Constant divergence must use transported Hessian"));
+          }
         const FullMatrix<double> analytic = copy.local_matrix();
         const auto               indices  = copy.dof_indices();
         scratch.set_keep_tau_constant(true);

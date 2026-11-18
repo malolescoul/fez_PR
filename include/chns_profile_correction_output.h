@@ -7,9 +7,9 @@
 
 namespace CahnHilliard
 {
-  /** Evaluate the same nodal inverse-profile reconstruction as assembly.
-   * A postprocessor of the interpolated phase gradient would export a
-   * different flux. Local FEValues also support volume and skin patches.
+  /** Evaluate the same correction field as assembly: transported phi_h for
+   * the constant model, nodal inverse-profile reconstruction for the local
+   * model. Local FEValues also support volume and skin patches.
    * The solution and mapping must outlive build_patches().
    */
   template <int dim, typename VectorType>
@@ -104,6 +104,13 @@ namespace CahnHilliard
             0.;
       std::vector<Tensor<2, dim>> grad_u(points.size());
       values[velocity].get_function_gradients(solution, grad_u);
+      std::vector<double> phi_h(points.size());
+      std::vector<Tensor<1, dim>> grad_phi_h(points.size());
+      if (!ch.local_profile_correction())
+      {
+        values[phase].get_function_values(solution, phi_h);
+        values[phase].get_function_gradients(solution, grad_phi_h);
+      }
       const double eps = ch.epsilon_interface;
       const double base =
         ch.mobility * (3. / (2. * std::sqrt(2.))) * ch.surface_tension / eps;
@@ -137,8 +144,11 @@ namespace CahnHilliard
                                          base,
                                          ch.profile_correction_timescale_factor,
                                          geometric);
-        const auto flux = coefficient.apply(evaluate_profile_correction(
-          profile.value, profile.gradient(), Tensor<2, dim>(), eps, false));
+        const auto flux = coefficient.apply(evaluate_profile_correction<dim>(
+          ch.local_profile_correction() ? profile.value : phi_h[q],
+          ch.local_profile_correction() ? profile.gradient() : grad_phi_h[q],
+          Tensor<2, dim>(), eps, false,
+          nullptr, ch.local_profile_correction()));
         out[q][0]       = ch.local_profile_correction() ?
                             coefficient.value / (2. * base) :
                             ch.profile_correction_strength;

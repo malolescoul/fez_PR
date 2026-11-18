@@ -65,18 +65,20 @@ int main()
     const double K     = local ?
                            1.3 * (base + .1 * .1 * (std::hypot(z, delta) - delta)) :
                            2. * ch.profile_correction_strength * base;
-    const double r     = std::tanh(.2 + .3 * .3);
+    const double r     = local ? std::tanh(.2 + .3 * .3) :
+                                 .7 * std::tanh(.2) + .3 * std::tanh(.5);
     Tensor<1, 2> grad;
-    grad[0]      = (1. - r * r) * .3;
-    const auto f = CahnHilliard::evaluate_profile_correction(
-      r, grad, Tensor<2, 2>(), .1, false);
+    grad[0]      = local ? (1. - r * r) * .3 :
+                           std::tanh(.5) - std::tanh(.2);
+    const auto f = CahnHilliard::evaluate_profile_correction<2>(
+      r, grad, Tensor<2, 2>(), .1, false, nullptr, local);
     AssertThrow(std::abs(out[0][0] - K / (2. * base)) < 1e-12,
                 ExcMessage("Exported strength"));
     AssertThrow(std::abs(out[0][1] - K) < 1e-12,
                 ExcMessage("Exported coefficient"));
     for (unsigned d = 0; d < 2; ++d)
       AssertThrow(std::abs(out[0][2 + d] - K * f.flux[d]) < 1e-12,
-                  ExcMessage("Exported reconstructed flux"));
+                  ExcMessage("Constant flux must use phi_h; local flux must use phi_r"));
     AssertThrow(output.get_names().size() == (local ? 11 : 4),
                 ExcInternalError());
     DataOut<2> volume;
@@ -100,6 +102,34 @@ int main()
                   std::string::npos,
                 ExcMessage("Missing skin fields"));
   }
-  deallog << "Constant and local profile output matches reconstructed flux OK"
+  // A distorted saturated tail must still be restored in constant mode.
+  // Local timescale deliberately retains its historical tail extinction.
+  for (const double sign : {-1., 1.})
+    for (const bool local : {false, true})
+    {
+      ch.profile_correction_model =
+        local ?
+          Parameters::CahnHilliard<2>::ProfileCorrectionModel::local_timescale :
+          Parameters::CahnHilliard<2>::ProfileCorrectionModel::constant;
+      for (unsigned j = 0; j < indices.size(); ++j)
+        if (fe.system_to_component_index(j).first == 3)
+          solution[indices[j]] = sign * (.9999 + .00001 * points[indices[j]][0]);
+      const double base = .2 * (3. / (2. * std::sqrt(2.))) * .8 / .1;
+      CahnHilliard::ProfileCorrectionOutput<2, Vector<double>> output(
+        ch, mapping, solution, 3, 0, {},
+        2. * ch.profile_correction_strength * base);
+      std::vector<Vector<double>> out(1, Vector<double>(local ? 11 : 4));
+      output.evaluate_vector_field(input, out);
+      AssertThrow(local ? out[0][2] == 0. : sign * out[0][2] < -1e-6,
+                  ExcMessage("Only local correction may cut off saturated tails"));
+      for (unsigned j = 0; j < indices.size(); ++j)
+        if (fe.system_to_component_index(j).first == 3)
+          solution[indices[j]] = sign;
+      output.evaluate_vector_field(input, out);
+      AssertThrow(std::abs(out[0][2]) < 1e-13 &&
+                    std::abs(out[0][3]) < 1e-13,
+                  ExcMessage("Uniform pure phases must have zero correction flux"));
+    }
+  deallog << "Constant phi_h and local reconstructed profile output OK"
           << std::endl;
 }

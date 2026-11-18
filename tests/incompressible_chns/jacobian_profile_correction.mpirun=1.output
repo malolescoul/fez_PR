@@ -10,37 +10,37 @@ ID 3 -> y_max
 Number of degrees of freedom: 109
 
 Time step 1 - Advancing to t = 0.001.
-Max absolute error analytical vs fd matrix is 1.18751e-06
-Newton iter.  0:          nonlinear residual = 2.53333109e-01
-Newton iter.  1:          nonlinear residual = 6.26606994e-03	(M)
-Newton iter.  2:          nonlinear residual = 8.19127513e-07	(M)
-Newton iter.  3:          nonlinear residual = 1.17884563e-10	(M)
-Newton iter.  4:          nonlinear residual = 4.47243420e-14	(M)
+Max absolute error analytical vs fd matrix is 1.17768e-06
+Newton iter.  0:          nonlinear residual = 2.53329178e-01
+Newton iter.  1:          nonlinear residual = 6.29328397e-03	(M)
+Newton iter.  2:          nonlinear residual = 8.20440852e-07	(M)
+Newton iter.  3:          nonlinear residual = 1.14190314e-10	(M)
+Newton iter.  4:          nonlinear residual = 4.39400435e-14	(M)
 Stopping because residual is below prescribed tolerance (1.00e-10)
 
 Time step 2 - Advancing to t = 1.00e-02.
-Max absolute error analytical vs fd matrix is 1.80e-06
-Newton iter.  0:          nonlinear residual = 9.79143025e-01
-Newton iter.  1:          nonlinear residual = 1.60373496e-02	(M)
-Newton iter.  2:          nonlinear residual = 1.83422851e-05	(M)
-Newton iter.  3:          nonlinear residual = 3.17055242e-08	(M)
-Newton iter.  4:          nonlinear residual = 4.54453539e-11	(M)
+Max absolute error analytical vs fd matrix is 1.73e-06
+Newton iter.  0:          nonlinear residual = 9.79125634e-01
+Newton iter.  1:          nonlinear residual = 1.60487469e-02	(M)
+Newton iter.  2:          nonlinear residual = 1.83603554e-05	(M)
+Newton iter.  3:          nonlinear residual = 3.17124665e-08	(M)
+Newton iter.  4:          nonlinear residual = 4.55985193e-11	(M)
 Stopping because residual is below prescribed tolerance (1.00e-10)
 
 Time step 3 - Advancing to t = 2.00e-02.
-Max absolute error analytical vs fd matrix is 1.77e-06
-Newton iter.  0:          nonlinear residual = 4.54173966e-01
-Newton iter.  1:          nonlinear residual = 3.55334324e-03	(M)
-Newton iter.  2:          nonlinear residual = 1.32486710e-06	(M)
-Newton iter.  3:          nonlinear residual = 2.37600214e-09	(M)
-Newton iter.  4:          nonlinear residual = 4.80104666e-12	(M)
+Max absolute error analytical vs fd matrix is 1.75e-06
+Newton iter.  0:          nonlinear residual = 4.54161971e-01
+Newton iter.  1:          nonlinear residual = 3.59719176e-03	(M)
+Newton iter.  2:          nonlinear residual = 1.36200659e-06	(M)
+Newton iter.  3:          nonlinear residual = 2.45784666e-09	(M)
+Newton iter.  4:          nonlinear residual = 4.97108298e-12	(M)
 Stopping because residual is below prescribed tolerance (1.00e-10)
 
 Time step 4 - Advancing to t = 3.00e-02.
-Max absolute error analytical vs fd matrix is 1.26e-06
-Newton iter.  0:          nonlinear residual = 1.59340808e-01
-Newton iter.  1:          nonlinear residual = 6.62759499e-04	(M)
-Newton iter.  2:          nonlinear residual = 5.83471559e-07	(M)
-Newton iter.  3:          nonlinear residual = 1.25852078e-09	(M)
-Newton iter.  4:          nonlinear residual = 2.72232269e-12	(M)
+Max absolute error analytical vs fd matrix is 1.25e-06
+Newton iter.  0:          nonlinear residual = 1.59340861e-01
+Newton iter.  1:          nonlinear residual = 6.63363559e-04	(M)
+Newton iter.  2:          nonlinear residual = 5.82257594e-07	(M)
+Newton iter.  3:          nonlinear residual = 1.25646701e-09	(M)
+Newton iter.  4:          nonlinear residual = 2.71943808e-12	(M)
 Stopping because residual is below prescribed tolerance (1.00e-10)

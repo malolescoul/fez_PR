@@ -316,7 +316,8 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::MMSSourceTerm::
   CahnHilliard::ProfileCorrection<dim> correction;
   if (cahn_hilliard_param.enable_profile_correction)
     correction = CahnHilliard::evaluate_profile_correction<dim>(
-      phi, grad_phi, mms.exact_tracer->hessian(p), epsilon);
+      phi, grad_phi, mms.exact_tracer->hessian(p), epsilon, true, nullptr,
+      cahn_hilliard_param.local_profile_correction());
   auto phase_flux =
     M * grad_mu + profile_correction_coefficient * correction.flux;
   double phase_diffusion =

@@ -1186,7 +1186,9 @@ namespace NavierStokesScratch
           fe_values_moving[potential].get_function_hessians(current_solution,
                                                             potential_hessians);
       }
-      if ((gradient_dependent_mobility && enable_tracer_stabilization) ||
+      if (((gradient_dependent_mobility ||
+            param.cahn_hilliard.enable_profile_correction) &&
+           enable_tracer_stabilization) ||
           (laplace_beltrami && enable_stabilization))
         fe_values_moving[tracer].get_function_hessians(current_solution,
                                                        tracer_hessians);
@@ -1244,12 +1246,16 @@ namespace NavierStokesScratch
                 profile.inverse_hessian += nodal * hessian_shape_phi[q][k];
             }
           profile.value         = std::tanh(inverse_value);
-          const auto correction = CahnHilliard::evaluate_profile_correction(
-            profile.value,
-            profile.gradient(),
-            enable_tracer_stabilization ? profile.hessian() : Tensor<2, dim>(),
+          const bool local = param.cahn_hilliard.local_profile_correction();
+          const auto correction = CahnHilliard::evaluate_profile_correction<dim>(
+            local ? profile.value : tracer_values[q],
+            local ? profile.gradient() : tracer_gradients[q],
+            enable_tracer_stabilization ?
+              (local ? profile.hessian() : tracer_hessians[q]) : Tensor<2, dim>(),
             epsilon,
-            enable_tracer_stabilization);
+            enable_tracer_stabilization,
+            nullptr,
+            local);
           auto &coefficient = profile_coefficient[q];
           coefficient       = CahnHilliard::LocalProfileCoefficient<dim>(
             profile_correction_coefficient);

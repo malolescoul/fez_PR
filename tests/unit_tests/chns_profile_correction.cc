@@ -63,7 +63,7 @@ void check_flux()
 // Check every input of the analytical linearization, including the second
 // derivatives needed by tracer SUPG inside the narrow activation interval.
 template <int dim>
-void check_linearization()
+void check_linearization(const bool apply_tail_cutoff = true)
 {
   Tensor<1, dim> gradient;
   Tensor<2, dim> hessian;
@@ -73,13 +73,18 @@ void check_linearization()
     for (unsigned int e = 0; e < dim; ++e)
       hessian[d][e] = 0.03 * (d + e + 1);
   }
-  for (const double phi : {0., -0.4, 0.99, -0.9996, 0.9996, 1., 1.01})
+  for (const double phi : {0., -0.4, 0.99, -0.9996, 0.9996, -0.9999, 0.9999,
+                           1., 1.01})
     for (const bool flat : {false, true})
     {
+      // Without cutoff the flux is C1 at |phi|=1 but its second phi-derivative
+      // (divergence linearization) jumps there; centred differences straddle it.
+      if (!apply_tail_cutoff && phi == 1.)
+        continue;
       const auto g = flat ? Tensor<1, dim>() : gradient;
       CahnHilliard::ProfileCorrectionLinearization<dim> jacobian;
       CahnHilliard::evaluate_profile_correction(
-        phi, g, hessian, 0.3, true, &jacobian);
+        phi, g, hessian, 0.3, true, &jacobian, apply_tail_cutoff);
       for (unsigned int direction = 0; direction < 1 + dim + dim * dim;
            ++direction)
       {
@@ -97,12 +102,14 @@ void check_linearization()
         }
         const auto analytic = jacobian.variation(dphi, dg, dh);
         double     error    = std::numeric_limits<double>::max();
-        for (const double step : {1e-6, 1e-7, 1e-8})
+        for (const double step : {1e-6, 1e-7, 1e-8, 1e-9, 1e-10})
         {
-          const auto plus = CahnHilliard::evaluate_profile_correction(
-            phi + step * dphi, g + step * dg, hessian + step * dh, 0.3);
-          const auto minus = CahnHilliard::evaluate_profile_correction(
-            phi - step * dphi, g - step * dg, hessian - step * dh, 0.3);
+          const auto plus = CahnHilliard::evaluate_profile_correction<dim>(
+            phi + step * dphi, g + step * dg, hessian + step * dh, 0.3,
+            true, nullptr, apply_tail_cutoff);
+          const auto minus = CahnHilliard::evaluate_profile_correction<dim>(
+            phi - step * dphi, g - step * dg, hessian - step * dh, 0.3,
+            true, nullptr, apply_tail_cutoff);
           error = std::min(
             error,
             std::max(
@@ -116,6 +123,88 @@ void check_linearization()
                     ExcMessage("Incorrect implicit profile linearization."));
       }
     }
+}
+
+template <int dim>
+void check_without_tail_cutoff()
+{
+  constexpr double epsilon = 0.3;
+  const double     delta   = CahnHilliard::profile_correction_gradient_floor(epsilon);
+  Tensor<1, dim> w;
+  w[0] = 0.7 / (std::sqrt(2.) * epsilon);
+  const auto center = CahnHilliard::evaluate_profile_correction<dim>(
+    0., w, {}, epsilon, true, nullptr, false);
+  // Inside the interface the floor is negligible: at fixed inverse-profile
+  // slope, F/(1-phi_r^2) stays that of the centre and no tail cutoff acts.
+  for (const double phi : {-.9, -.5, .5, .9})
+  {
+    CahnHilliard::ReconstructedProfile<dim> p{phi, w, {}};
+    const auto result = CahnHilliard::evaluate_profile_correction<dim>(
+      phi, p.gradient(), p.hessian(), epsilon, true, nullptr, false);
+    AssertThrow((result.flux / (1. - phi * phi) - center.flux).norm() <
+                  1e-3 * center.flux.norm(),
+                ExcMessage("Constant correction attenuates the interface"));
+  }
+  for (const double phi : {-.99999999, -.9999, -.9996, .9996, .9999, .99999999})
+  {
+    CahnHilliard::ReconstructedProfile<dim> p{phi, w, {}};
+    const auto result = CahnHilliard::evaluate_profile_correction<dim>(
+      phi, p.gradient(), p.hessian(), epsilon, true, nullptr, false);
+    // Never stronger than the unfloored flux, and of the same sign.
+    AssertThrow(result.flux * center.flux >= 0. &&
+                  result.flux.norm() <=
+                    (1. - phi * phi) * center.flux.norm() * (1. + 1e-12),
+                ExcMessage("Floored tail flux must stay bounded"));
+    // Independent spatial derivative for an affine s_h and phi_r=tanh(s_h).
+    const double s = std::atanh(phi), h = 1e-5;
+    const CahnHilliard::ReconstructedProfile<dim> plus{
+      std::tanh(s + h * w[0]), w, {}};
+    const CahnHilliard::ReconstructedProfile<dim> minus{
+      std::tanh(s - h * w[0]), w, {}};
+    const auto fp = CahnHilliard::evaluate_profile_correction<dim>(
+      plus.value, plus.gradient(), {}, epsilon, false, nullptr, false);
+    const auto fm = CahnHilliard::evaluate_profile_correction<dim>(
+      minus.value, minus.gradient(), {}, epsilon, false, nullptr, false);
+    AssertThrow(std::abs((fp.flux[0] - fm.flux[0]) / (2. * h) -
+                         result.divergence) < 1e-10,
+                ExcMessage("Incorrect constant tail divergence"));
+    p.inverse_gradient = w / .7;
+    const auto equilibrium = CahnHilliard::evaluate_profile_correction<dim>(
+      phi, p.gradient(), p.hessian(), epsilon, true, nullptr, false);
+    AssertThrow(equilibrium.flux.norm() < 1e-13 &&
+                  std::abs(equilibrium.divergence) < 1e-12,
+                ExcMessage("Equilibrium tail must not be corrected"));
+  }
+  // No branch at |phi|=1: a nonzero gradient gives a continuous flux.
+  Tensor<1, dim> g;
+  g[0] = 3. * delta;
+  for (const double sign : {-1., 1.})
+  {
+    const auto inside = CahnHilliard::evaluate_profile_correction<dim>(
+      sign * (1. - 1e-13), g, {}, epsilon, true, nullptr, false);
+    const auto outside = CahnHilliard::evaluate_profile_correction<dim>(
+      sign * (1. + 1e-13), g, {}, epsilon, true, nullptr, false);
+    AssertThrow(inside.flux.norm() > 0. &&
+                  (inside.flux - outside.flux).norm() < 1e-10 * inside.flux.norm(),
+                ExcMessage("Constant correction must be continuous at |phi|=1"));
+  }
+  // The anti-diffusive slope at zero gradient vanishes in pure phases,
+  // whereas the unfloored slope would remain 1-sqrt(1+beta^2)/beta.
+  for (const double phi : {-1., 1., -1.01, 1.01,
+                           std::tanh(CahnHilliard::inverse_profile(-1.).value),
+                           std::tanh(CahnHilliard::inverse_profile(1.).value)})
+  {
+    CahnHilliard::ProfileCorrectionLinearization<dim> jacobian;
+    const auto result = CahnHilliard::evaluate_profile_correction<dim>(
+      phi, {}, {}, epsilon, true, &jacobian, false);
+    AssertThrow(result.flux.norm() == 0. && result.divergence == 0. &&
+                  std::isfinite(jacobian.flux_gradient.norm()) &&
+                  std::isfinite(jacobian.divergence_gradient.norm()),
+                ExcMessage("Uniform pure phases must have finite zero flux"));
+    if (std::abs(phi) >= 1.)
+      AssertThrow(jacobian.flux_gradient.norm() < 1e-2,
+                  ExcMessage("Pure phases must not be anti-diffusive"));
+  }
 }
 
 void check_inverse_profile()
@@ -209,6 +298,10 @@ int main()
   check_flux<3>();
   check_linearization<2>();
   check_linearization<3>();
+  check_linearization<2>(false);
+  check_linearization<3>(false);
+  check_without_tail_cutoff<2>();
+  check_without_tail_cutoff<3>();
   deallog << "Profile flux: divergence, equilibrium, tails and zero gradient OK"
           << std::endl;
 }

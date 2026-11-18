@@ -717,7 +717,8 @@ namespace NavierStokesScratch
             param.cahn_hilliard.enable_profile_correction)) ||
           (laplace_beltrami && enable_stabilization))
       {
-        if (gradient_dependent_mobility || laplace_beltrami)
+        if (gradient_dependent_mobility || laplace_beltrami ||
+            param.cahn_hilliard.enable_profile_correction)
           tracer_hessians.resize(n_q_points);
         hessian_shape_phi.resize(
           n_q_points, std::vector<Tensor<2, dim>>(max_dofs_per_cell));

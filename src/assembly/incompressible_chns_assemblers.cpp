@@ -404,14 +404,18 @@ namespace Assembly
         CahnHilliard::ProfileCorrection<dim>              base_correction;
         if (!sd.profile_correction_flux.empty())
           base_correction = CahnHilliard::evaluate_profile_correction(
-            sd.reconstructed_profile[q].value,
-            sd.reconstructed_profile[q].gradient(),
+            sd.local_profile_correction() ? sd.reconstructed_profile[q].value :
+                                            phi,
+            sd.local_profile_correction() ? sd.reconstructed_profile[q].gradient() :
+                                            grad_phi,
             BaseType::with_tracer_stabilization ?
-              sd.reconstructed_profile[q].hessian() :
+              (sd.local_profile_correction() ? sd.reconstructed_profile[q].hessian() :
+                                               sd.tracer_hessians[q]) :
               Tensor<2, dim>(),
             sd.epsilon,
             BaseType::with_tracer_stabilization,
-            &correction);
+            &correction,
+            sd.local_profile_correction());
 
         const auto projection = sd.get_flux_projection(q);
 
@@ -454,9 +458,17 @@ namespace Assembly
                 inverse_derivative * sd.hessian_shape_phi[q][j] :
                 Tensor<2, dim>(),
               BaseType::with_tracer_stabilization);
-            dcorrection = correction.variation(dprofile.value,
-                                               dprofile.gradient,
-                                               dprofile.hessian);
+            // The constant model acts directly on the transported FE field.
+            // Projection and the local model still use the reconstructed field.
+            if (sd.local_profile_correction())
+              dcorrection = correction.variation(dprofile.value,
+                                                 dprofile.gradient,
+                                                 dprofile.hessian);
+            else
+              dcorrection = correction.variation(
+                phi_phi[j], grad_phi_phi[j],
+                BaseType::with_tracer_stabilization ?
+                  sd.hessian_shape_phi[q][j] : Tensor<2, dim>());
             const auto dcoefficient = sd.profile_coefficient[q].variation(
               inverse_derivative * grad_phi_phi[j],
               (BaseType::with_tracer_stabilization ||
@@ -584,7 +596,9 @@ namespace Assembly
                 0.;
 
             Tensor<2, dim> dhess_phi_x;
-            if ((sd.enable_tracer_stabilization && sd.gradient_dependent_mobility) ||
+            if ((sd.enable_tracer_stabilization &&
+                 (sd.gradient_dependent_mobility ||
+                  !sd.profile_correction_flux.empty())) ||
                 (sd.laplace_beltrami && sd.enable_stabilization))
               {
                 const auto &H = sd.tracer_hessians[q];
@@ -619,9 +633,10 @@ namespace Assembly
                     for (unsigned int c = 0; c < dim; ++c)
                       dhess_profile[a][b] -= grad_profile[c] * K[c][a][b];
               }
-              dcorrection_x = correction.variation(0.,
-                                                   -transpose_G * grad_profile,
-                                                   dhess_profile);
+              dcorrection_x = sd.local_profile_correction() ?
+                correction.variation(0., -transpose_G * grad_profile,
+                                      dhess_profile) :
+                correction.variation(0., dgrad_phi_x, dhess_phi_x);
               Tensor<2, dim> dH_inverse;
               Tensor<3, dim> dH_velocity;
               if constexpr (BaseType::with_tracer_stabilization)
