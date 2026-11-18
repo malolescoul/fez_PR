@@ -376,6 +376,12 @@ public:
 
 private:
   /**
+   * Build a text output filename with the simulation and postprocessing
+   * prefixes.
+   */
+  std::string postprocessing_filename(const std::string &prefix) const;
+
+  /**
    * Returns a unique pointer to a newly created object deriving from
    * PostprocessofAtDofBase.
    * The exact derived class of the created object is determined by both @p type
@@ -947,8 +953,8 @@ void PostProcessingHandler<dim>::compute_forces(
 
     if (mpi_rank == 0 && should_output_forces(time_handler))
     {
-      std::ofstream outfile(output_param.output_dir +
-                            post_proc_param.forces.output_prefix + ".txt");
+      std::ofstream outfile(
+        postprocessing_filename(post_proc_param.forces.output_prefix));
       write_table(outfile, forces_table, post_proc_param.forces);
     }
   }
@@ -1024,9 +1030,9 @@ void PostProcessingHandler<dim>::compute_forces(
     if (mpi_rank == 0 &&
         should_output_postprocessing(time_handler, slices_param))
     {
-      std::ofstream slices_outfile(output_param.output_dir +
-                                   post_proc_param.forces.output_prefix + "_" +
-                                   slices_param.output_prefix + ".txt");
+      std::ofstream slices_outfile(
+        postprocessing_filename(post_proc_param.forces.output_prefix + "_" +
+                                slices_param.output_prefix));
       write_table(slices_outfile,
                   forces_table_per_slice,
                   post_proc_param.forces);
@@ -1125,9 +1131,8 @@ void PostProcessingHandler<dim>::compute_structure_mean_position(
   }
   if (mpi_rank == 0 && should_output_mean_position(time_handler))
   {
-    std::ofstream outfile(output_param.output_dir +
-                          post_proc_param.structure_position.output_prefix +
-                          ".txt");
+    std::ofstream outfile(postprocessing_filename(
+      post_proc_param.structure_position.output_prefix));
     write_table(outfile,
                 structure_mean_position_table,
                 post_proc_param.structure_position);
@@ -1188,9 +1193,8 @@ void PostProcessingHandler<dim>::compute_field_integrals(
       // Accumulate every time step; the frequency only controls file output.
       if (should_output_postprocessing(time_handler, integral_param))
       {
-        std::ofstream outfile(output_param.output_dir +
-                              integral_param.output_prefix + "_" +
-                              variable_name + ".txt");
+        std::ofstream outfile(postprocessing_filename(
+          integral_param.output_prefix + "_" + variable_name));
         write_table(outfile, table, integral_param);
       }
     };
@@ -1255,8 +1259,7 @@ void PostProcessingHandler<dim>::compute_multiphase_indicators(
 
       if (should_output_postprocessing(time_handler, param))
       {
-        std::ofstream outfile(output_param.output_dir + param.output_prefix +
-                              ".txt");
+        std::ofstream outfile(postprocessing_filename(param.output_prefix));
         write_table(outfile, table, param);
       }
     };
