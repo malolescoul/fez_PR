@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/).
 Please use the tags "Added", "Changed" or "Fixed", depending on the nature of the changes.
 
+## [0.0.0] 2026-11-14
+
+### Fixed
+Removed erroneous face contribution to the Jacobian matrix when applying weak pressure boundary conditions in the compressible solver. [#117](https://github.com/arthurbawin/fez/pull/117)
+
 ## [0.0.0] 2026-11-13
 
 ### Added
