@@ -225,7 +225,10 @@ namespace Parameters
           FixedFraction,
           // Graded band around the CHNS interface: each cell targets a level
           // given by the distance to the interface reconstructed from phi.
-          InterfaceBand
+          InterfaceBand,
+          // Kelly fixed-number marking, with the band as a minimum level
+          // (interface band with "combine with kelly").
+          InterfaceBandKelly
         } refinement_strategy;
 
         // Interface band: increasing thresholds on |phi|. Cells closer to the

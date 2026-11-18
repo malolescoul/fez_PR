@@ -713,7 +713,9 @@ void TransientFixedPointData<dim>::apply_gradation_to_metrics()
 }
 
 template <int dim>
-void TransientFixedPointData<dim>::adapt_meshes(const Vector<float> &criteria)
+void TransientFixedPointData<dim>::adapt_meshes(
+  const Vector<float> &criteria,
+  const Vector<float> &minimum_levels)
 {
   if (!param.mesh.adaptation.enable)
     return;
@@ -734,7 +736,7 @@ void TransientFixedPointData<dim>::adapt_meshes(const Vector<float> &criteria)
       /**
        * Adapt the triangulation with the routines from deal.II.
        */
-      this->adapt_mesh_with_dealii_routines(criteria);
+      this->adapt_mesh_with_dealii_routines(criteria, minimum_levels);
       break;
     }
     default:
@@ -781,7 +783,8 @@ void TransientFixedPointData<dim>::adapt_meshes_with_mmg()
 
 template <int dim>
 void TransientFixedPointData<dim>::adapt_mesh_with_dealii_routines(
-  const Vector<float> &criteria)
+  const Vector<float> &criteria,
+  const Vector<float> &minimum_levels)
 {
   const bool verbose =
     Utilities::MPI::this_mpi_process(mpi_communicator) == 0 &&
@@ -806,6 +809,8 @@ void TransientFixedPointData<dim>::adapt_mesh_with_dealii_routines(
   // Mark cells for refinement and coarsening
   switch (tree_amr.refinement_strategy)
   {
+    case Parameters::Mesh::Adaptation::TreeAMR::RefinementStrategy::
+      InterfaceBandKelly:
     case Parameters::Mesh::Adaptation::TreeAMR::RefinementStrategy::FixedNumber:
       parallel::distributed::GridRefinement::refine_and_coarsen_fixed_number(
         triangulation,
@@ -837,6 +842,25 @@ void TransientFixedPointData<dim>::adapt_mesh_with_dealii_routines(
       break;
     default:
       DEAL_II_ASSERT_UNREACHABLE();
+  }
+
+  if (tree_amr.refinement_strategy == Parameters::Mesh::Adaptation::TreeAMR::
+                                        RefinementStrategy::InterfaceBandKelly)
+  {
+    AssertThrow(minimum_levels.size() == triangulation.n_active_cells(),
+                ExcMessage("Combined Kelly/band adaptation requires the "
+                           "interface-band minimum levels."));
+    for (const auto &cell : triangulation.active_cell_iterators() |
+                              IteratorFilters::LocallyOwnedCell())
+    {
+      const double minimum = minimum_levels[cell->active_cell_index()];
+      // Refinement is the union of both requests; coarsening must satisfy
+      // both. Protect cells at the band level against Kelly coarsening.
+      if (cell->level() <= minimum)
+        cell->clear_coarsen_flag();
+      if (cell->level() < minimum)
+        cell->set_refine_flag();
+    }
   }
 
   // Bound refinement according to prescribed min and max allowed levels.

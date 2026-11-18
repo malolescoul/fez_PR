@@ -458,15 +458,24 @@ public:
   /**
    * Compute the cellwise error estimate used as refinement/coarsening
    * criterion.
+   *
+   * For Kelly refinement, an error estimate is computed for each of the
+   * variables for adaptation. Since these variables can have very different
+   * units and magnitudes (e.g., velocity and pressure), the raw estimates
+   * cannot be compared directly: the estimate of the largest variable would
+   * always dominate. Each estimate is thus divided by its maximum over the
+   * whole mesh, and the criterion on each cell is the largest of these
+   * normalized estimates, that is, the error of the most critical variable
+   * on that cell.
    */
   void compute_error_estimate();
 
   /**
-   * For the interface band strategy, store in the cellwise criterion the
+   * For the interface band strategies, store in levels the
    * target refinement level of each cell, from the distance to the CHNS
    * interface reconstructed from the phase tracer.
    */
-  void compute_interface_band_levels();
+  void compute_interface_band_levels(Vector<float> &levels);
 
   /**
    * Adapt the mesh (metric-based remeshing only for now).
@@ -669,6 +678,9 @@ protected:
    * enabled.
    */
   Vector<float> cellwise_refinement_criterion;
+
+  // Minimum levels imposed independently of Kelly in the combined strategy.
+  Vector<float> cellwise_interface_band_levels;
 };
 
 /* ---------------- template and inline functions ----------------- */

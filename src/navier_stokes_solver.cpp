@@ -1257,21 +1257,28 @@ void NavierStokesSolver<dim, with_moving_mesh>::compute_error_estimate()
 {
   TimerOutput::Scope t(computing_timer, "Compute Kelly error estimate");
 
-  cellwise_refinement_criterion.reinit(triangulation->n_active_cells());
-
-  // FIXME: Implement adaptation with multiple variables
-  AssertThrow(param.mesh.adaptation.tree_amr.variables_for_adaptation.size() ==
-                1,
-              ExcMessage("Adaptation is limited to a single variable for now"));
+  const unsigned int n_active_cells = triangulation->n_active_cells();
+  cellwise_refinement_criterion.reinit(n_active_cells);
+  cellwise_interface_band_levels.reinit(0);
 
   const auto &tree_amr = param.mesh.adaptation.tree_amr;
   if (tree_amr.refinement_strategy ==
       Parameters::Mesh::Adaptation::TreeAMR::RefinementStrategy::InterfaceBand)
   {
-    compute_interface_band_levels();
+    AssertThrow(tree_amr.variables_for_adaptation.size() == 1 &&
+                  tree_amr.variables_for_adaptation[0] ==
+                    SolverInfo::VariableType::phase_tracer,
+                ExcMessage("The interface band adaptation requires "
+                           "'variables for adaptation = phase_tracer'."));
+    compute_interface_band_levels(cellwise_refinement_criterion);
     return;
   }
 
+  if (tree_amr.refinement_strategy == Parameters::Mesh::Adaptation::TreeAMR::
+                                        RefinementStrategy::InterfaceBandKelly)
+    compute_interface_band_levels(cellwise_interface_band_levels);
+
+  Vector<float> variable_estimate(n_active_cells);
   for (const auto variable :
        param.mesh.adaptation.tree_amr.variables_for_adaptation)
   {
@@ -1281,20 +1288,31 @@ void NavierStokesSolver<dim, with_moving_mesh>::compute_error_estimate()
       *error_face_quadrature,
       std::map<types::boundary_id, const Function<dim> *>(),
       *present_solution,
-      cellwise_refinement_criterion,
+      variable_estimate,
       get_component_mask(variable));
+
+    // With several variables, scale by the global maximum, so that estimates
+    // of variables with different units and magnitudes can be compared.
+    if (tree_amr.variables_for_adaptation.size() > 1)
+    {
+      const float max_estimate =
+        Utilities::MPI::max(variable_estimate.linfty_norm(), mpi_communicator);
+      if (max_estimate > 0.f)
+        variable_estimate /= max_estimate;
+    }
+
+    for (unsigned int i = 0; i < n_active_cells; ++i)
+      cellwise_refinement_criterion[i] =
+        std::max(cellwise_refinement_criterion[i], variable_estimate[i]);
   }
 }
 
 template <int dim, bool with_moving_mesh>
-void NavierStokesSolver<dim, with_moving_mesh>::compute_interface_band_levels()
+void NavierStokesSolver<dim, with_moving_mesh>::compute_interface_band_levels(
+  Vector<float> &levels)
 {
   const auto &tree_amr = param.mesh.adaptation.tree_amr;
-  AssertThrow(tree_amr.variables_for_adaptation.size() == 1 &&
-                tree_amr.variables_for_adaptation[0] ==
-                  SolverInfo::VariableType::phase_tracer,
-              ExcMessage("The interface band adaptation requires "
-                         "'variables for adaptation = phase_tracer'."));
+  levels.reinit(triangulation->n_active_cells());
 
   // Distance to the interface reconstructed from phi,
   // d = sqrt(2) eps g(phi) with g = atanh continued near +/-1.
@@ -1343,7 +1361,7 @@ void NavierStokesSolver<dim, with_moving_mesh>::compute_interface_band_levels()
                                static_cast<int>(tree_amr.max_level) - int(k));
         break;
       }
-    cellwise_refinement_criterion[cell->active_cell_index()] = target;
+    levels[cell->active_cell_index()] = target;
   }
 }
 
@@ -1355,7 +1373,8 @@ void NavierStokesSolver<dim, with_moving_mesh>::adapt_mesh()
 
   // Adapt the mesh(es): either with a riemannian metric, or with the cellwise
   // error criteria.
-  transient_fixed_point_data.adapt_meshes(cellwise_refinement_criterion);
+  transient_fixed_point_data.adapt_meshes(cellwise_refinement_criterion,
+                                          cellwise_interface_band_levels);
 
   // Re-setup up the dof_handler, constraints and linear algebra structures.
   // For steady-state convergence studies, we're doing the work twice, here

@@ -206,6 +206,13 @@ namespace Parameters
             "of the Kelly indicator, or a graded band around the CHNS "
             "interface reconstructed from the phase tracer.");
           prm.declare_entry(
+            "combine with kelly",
+            "false",
+            Patterns::Bool(),
+            "Interface band strategy: combine fixed-number Kelly marking on "
+            "the variables for adaptation with the minimum levels imposed by "
+            "the band. The band takes priority over the Kelly cell budget.");
+          prm.declare_entry(
             "interface band thresholds",
             "0.9, 0.999",
             Patterns::List(Patterns::Double(0., 1.)),
@@ -332,12 +339,18 @@ namespace Parameters
               Adaptation::TreeAMR::RefinementStrategy::FixedFraction;
           else if (parsed_strategy == "interface band")
             t.refinement_strategy =
-              Adaptation::TreeAMR::RefinementStrategy::InterfaceBand;
+              prm.get_bool("combine with kelly") ?
+                Adaptation::TreeAMR::RefinementStrategy::InterfaceBandKelly :
+                Adaptation::TreeAMR::RefinementStrategy::InterfaceBand;
           else
             AssertThrow(false,
                         ExcMessage(
                           "Unexpected mesh adaptation refinement strategy: " +
                           parsed_strategy));
+          AssertThrow(!prm.get_bool("combine with kelly") ||
+                        parsed_strategy == "interface band",
+                      ExcMessage("'combine with kelly' requires the interface "
+                                 "band refinement strategy."));
           const auto parsed_variable_list =
             Utilities::split_string_list(prm.get("variables for adaptation"),
                                          ",");
