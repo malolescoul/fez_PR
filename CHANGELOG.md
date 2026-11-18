@@ -7,6 +7,11 @@ Please use the tags "Added", "Changed" or "Fixed", depending on the nature of th
 ## [0.0.0] 2026-11-19
 
 ### Fixed
+Preserve volume and skin PVD visualization histories across checkpoint restarts. Discard records after the checkpoint and replace repeated output records without merging the nearby times used to visualize mesh transfers.
+
+## [0.0.0] 2026-11-19
+
+### Fixed
 When restarting from a checkpoint with a different time step and without time step adaptation, the duration of the last accepted step was overwritten by the new time step. The first variable-step BDF2 step after the restart then used the wrong previous time step, and was not consistent. The history of accepted time steps is now kept.
 
 ## [0.0.0] 2026-11-17
