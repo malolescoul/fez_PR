@@ -188,7 +188,8 @@ public:
   /**
    * Adapt the meshes on all subintervals.
    */
-  void adapt_meshes(const Vector<float> &criteria);
+  void adapt_meshes(const Vector<float> &criteria,
+                    const Vector<float> &minimum_levels = Vector<float>());
 
   /**
    * Clear the data for each subinterval.
@@ -228,7 +229,8 @@ private:
    * This function assumes a single time interval, and adapts the mesh
    * associated with the first interval.
    */
-  void adapt_mesh_with_dealii_routines(const Vector<float> &criteria);
+  void adapt_mesh_with_dealii_routines(const Vector<float> &criteria,
+                                       const Vector<float> &minimum_levels);
 
 private:
   /**

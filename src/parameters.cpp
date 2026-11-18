@@ -201,10 +201,14 @@ namespace Parameters
           prm.declare_entry(
             "refinement strategy",
             "fixed number",
-            Patterns::Selection("fixed number|fixed fraction|interface band"),
+            Patterns::Selection("fixed number|fixed fraction|interface band|"
+                                "interface band with kelly"),
             "Refinement strategy: deal.II's fixed number or fixed fraction "
             "of the Kelly indicator, or a graded band around the CHNS "
-            "interface reconstructed from the phase tracer.");
+            "interface reconstructed from the phase tracer. 'interface band "
+            "with kelly' combines fixed-number Kelly marking on the variables "
+            "for adaptation with minimum levels imposed by the phase band. "
+            "The band takes priority over the Kelly cell budget.");
           prm.declare_entry(
             "interface band thresholds",
             "0.9, 0.999",
@@ -334,6 +338,9 @@ namespace Parameters
           else if (parsed_strategy == "interface band")
             t.refinement_strategy =
               Adaptation::TreeAMR::RefinementStrategy::InterfaceBand;
+          else if (parsed_strategy == "interface band with kelly")
+            t.refinement_strategy =
+              Adaptation::TreeAMR::RefinementStrategy::InterfaceBandKelly;
           else
             AssertThrow(false,
                         ExcMessage(

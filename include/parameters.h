@@ -225,7 +225,9 @@ namespace Parameters
           FixedFraction,
           // Graded band around the CHNS interface: each cell targets a level
           // given by the distance to the interface reconstructed from phi.
-          InterfaceBand
+          InterfaceBand,
+          // Kelly fixed-number marking, with the band as a minimum level.
+          InterfaceBandKelly
         } refinement_strategy;
 
         // Interface band: increasing thresholds on |phi|. Cells closer to the
@@ -876,7 +878,7 @@ namespace Parameters
     double epsilon_interface;
     bool   with_tracer_limiter;
     bool   enable_profile_correction   = false;
-    bool   enable_flux_correction               = false;
+    bool   enable_flux_correction      = false;
     double profile_correction_strength = 0.6;
     enum class ProfileCorrectionModel
     {
