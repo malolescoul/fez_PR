@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <optional>
 
 template <int dim, bool with_moving_mesh>
 NavierStokesSolver<dim, with_moving_mesh>::NavierStokesSolver(
@@ -296,13 +297,7 @@ void NavierStokesSolver<dim, with_moving_mesh>::run_time_subinterval(
     setup_dofs();
   }
   else
-  {
-    // AMR was not yet tested with restart
-    AssertThrow(!param.with_tree_based_adaptation(),
-                ExcMessage("Simulation restart with adaptive mesh refinement "
-                           "(AMR) it currently not implemented."));
     restart();
-  }
 
   setup_mappings();
   initialize_interval(interval_index);
@@ -317,9 +312,11 @@ void NavierStokesSolver<dim, with_moving_mesh>::run_time_subinterval(
   create_sparsity_pattern();
 
   /**
-   * Apply initial refinement.
+   * Apply initial refinement. When restarting, the refined mesh is read from
+   * the checkpoint.
    */
-  if (!time_handler.is_steady() && param.with_tree_based_adaptation())
+  if (!time_handler.is_steady() && param.with_tree_based_adaptation() &&
+      !param.checkpoint_restart.restart)
   {
     prefix_data.is_prerefinement_step = true;
     for (unsigned int step = 0;
@@ -1504,6 +1501,18 @@ void NavierStokesSolver<dim, with_moving_mesh>::checkpoint()
   const std::string tmp_checkpoint_prefix =
     param.output.output_dir + "tmp." + param.checkpoint_restart.filename;
 
+  /**
+   * With AMR, the solutions are attached to the cells of the p4est
+   * triangulation and written with it, so that the simulation can restart
+   * with a different number of MPI processes. Only rank 0 then writes the
+   * time handler, which is the same on all ranks.
+   */
+  const bool with_amr = param.with_tree_based_adaptation();
+  AssertThrow(!with_amr || !uses_hp_capabilities(),
+              ExcMessage("Checkpointing with AMR is not implemented for hp "
+                         "dof handlers."));
+
+  if (!with_amr || mpi_rank == 0)
   {
     // Write a checkpoint file for each rank
     // All ranks will read the same local range for their PETSc vector otherwise
@@ -1513,8 +1522,22 @@ void NavierStokesSolver<dim, with_moving_mesh>::checkpoint()
                 ExcMessage("Could not write to the checkpoint file."));
     boost::archive::text_oarchive archive(checkpoint_file);
 
-    archive << *this;
+    if (with_amr)
+      archive << previous_solutions->size();
+    else
+      archive << *this;
     archive << time_handler;
+  }
+
+  // The solution transfer must exist until the triangulation is saved.
+  std::optional<SolutionTransfer<dim, LA::ParVectorType>> solution_transfer;
+  if (with_amr)
+  {
+    std::vector<const LA::ParVectorType *> all_in = {present_solution};
+    for (const auto &previous_solution : *previous_solutions)
+      all_in.push_back(&previous_solution);
+    solution_transfer.emplace(*dof_handler);
+    solution_transfer->prepare_for_serialization(all_in);
   }
 
   triangulation->save(tmp_checkpoint_prefix);
@@ -1535,12 +1558,70 @@ void NavierStokesSolver<dim, with_moving_mesh>::restart()
   const std::string checkpoint_prefix =
     param.output.output_dir + param.checkpoint_restart.filename;
 
+  // See checkpoint() for the AMR case
+  const bool with_amr = param.with_tree_based_adaptation();
+  AssertThrow(!with_amr || !uses_hp_capabilities(),
+              ExcMessage("Restarting with AMR is not implemented for hp dof "
+                         "handlers."));
+
+  if (with_amr)
+  {
+    // p4est loads the refinement on top of the coarse mesh, which must be
+    // created first: create the initial mesh, then remove its global
+    // refinement, if any.
+    MeshTools::read_mesh(*triangulation, param);
+    triangulation->coarsen_global(triangulation->n_global_levels() - 1);
+    AssertThrow(triangulation->n_global_levels() == 1,
+                ExcMessage("Restarting with AMR requires the coarse mesh "
+                           "without global refinement."));
+  }
+
   triangulation->load(checkpoint_prefix);
 
   // Setup up the dof handler and allocate parallel vectors before loading
   // the stored solutions
   setup_dofs();
 
+  if (with_amr)
+  {
+    std::ifstream checkpoint_file(checkpoint_prefix + "_rank0");
+    AssertThrow(checkpoint_file,
+                ExcMessage("Could not read from the checkpoint file."));
+    boost::archive::text_iarchive archive(checkpoint_file);
+
+    std::size_t n_previous_solutions;
+    archive >> n_previous_solutions;
+    AssertThrow(n_previous_solutions == previous_solutions->size(),
+                ExcMessage(
+                  "The number of previous solutions to read from checkpointed "
+                  "data does not match the number of previous solutions used "
+                  "for the current simulation. This probably indicates that "
+                  "you changed the time integration method, which is not "
+                  "supported."));
+    archive >> time_handler;
+
+    // The solutions are read on the cells of the loaded mesh, into vectors
+    // without ghost entries.
+    std::vector<LA::ParVectorType>   all_out(n_previous_solutions + 1,
+                                           LA::ParVectorType(locally_owned_dofs,
+                                                             mpi_communicator));
+    std::vector<LA::ParVectorType *> all_out_ptr;
+    for (auto &vec : all_out)
+      all_out_ptr.push_back(&vec);
+    SolutionTransfer<dim, LA::ParVectorType> solution_transfer(*dof_handler);
+    solution_transfer.deserialize(all_out_ptr);
+
+    *present_solution = all_out[0];
+    present_solution->update_ghost_values();
+    for (unsigned int i = 0; i < n_previous_solutions; ++i)
+    {
+      (*previous_solutions)[i] = all_out[i + 1];
+      (*previous_solutions)[i].update_ghost_values();
+    }
+    local_evaluation_point = *present_solution;
+    evaluation_point       = *present_solution;
+  }
+  else
   {
     std::ifstream checkpoint_file(checkpoint_prefix + "_rank" +
                                   std::to_string(mpi_rank));

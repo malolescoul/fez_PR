@@ -16,9 +16,12 @@
  * First, solve a manufactured solution problem from t = 0 to 0.5, checkpointing
  * once at t = 0.3. Then, restart from t = 0.3, finish the computation and
  * compare the errors on velocity and pressure.
+ *
+ * With AMR, the mesh is adapted every two time steps, so that the checkpoint
+ * at t = 0.3 contains a locally refined mesh and the solutions attached to it.
  */
 template <int dim>
-void test_restart()
+void test_restart(const bool with_amr)
 {
   // Manually create the parameters of the MMS file
   // incompressible_ns/mms_2d_bdf2.prm
@@ -56,6 +59,24 @@ void test_restart()
   // Mesh
   prm.enter_subsection("Mesh");
   prm.set("verbosity", "quiet");
+  if (with_amr)
+  {
+    prm.set("refinement level", "2");
+    prm.enter_subsection("Adaptation");
+    prm.set("verbosity", "quiet");
+    prm.set("enable", "true");
+    prm.set("strategy", "local refinement");
+    prm.enter_subsection("Local refinement");
+    prm.set("variables for adaptation", "velocity");
+    prm.set("refinement strategy", "fixed number");
+    prm.set("fraction to refine", "0.3");
+    prm.set("fraction to coarsen", "0.1");
+    prm.set("max grid level", "4");
+    prm.set("number of prerefinement steps", "1");
+    prm.set("adapt frequency", "2");
+    prm.leave_subsection();
+    prm.leave_subsection();
+  }
   prm.leave_subsection();
 
   // Time integration
@@ -88,6 +109,9 @@ void test_restart()
   prm.enter_subsection("FiniteElements");
   prm.set("Velocity degree", "2");
   prm.set("Pressure degree", "1");
+  // p4est refinement requires quads
+  if (with_amr)
+    prm.set("use quads", "true");
   prm.leave_subsection();
 
   // Physical properties
@@ -164,7 +188,7 @@ void test_restart()
   prm.enter_subsection("Checkpoint Restart");
   prm.set("enable checkpoint", "true");
   prm.set("restart", "false");
-  prm.set("checkpoint file", "checkpoint");
+  prm.set("checkpoint file", with_amr ? "checkpoint_amr" : "checkpoint");
   prm.set("checkpoint frequency", "3");
   prm.leave_subsection();
 
@@ -185,6 +209,7 @@ void test_restart()
     e_u = eh.get_unsteady_errors("u");
     e_p = eh.get_unsteady_errors("p");
 
+    deallog << (with_amr ? "With AMR" : "Without AMR") << std::endl;
     deallog << "Error without restart" << std::endl;
     for (unsigned int i = 0; i < e_u.size(); ++i)
     {
@@ -202,7 +227,7 @@ void test_restart()
     prm.enter_subsection("Checkpoint Restart");
     prm.set("enable checkpoint", "false");
     prm.set("restart", "true");
-    prm.set("checkpoint file", "checkpoint");
+    prm.set("checkpoint file", with_amr ? "checkpoint_amr" : "checkpoint");
     prm.set("checkpoint frequency", "3");
     prm.leave_subsection();
 
@@ -272,7 +297,8 @@ int main(int argc, char *argv[])
   {
     Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 1);
     MPILogInitAll                    log;
-    test_restart<2>();
+    test_restart<2>(false);
+    test_restart<2>(true);
   }
   catch (const std::exception &exc)
   {

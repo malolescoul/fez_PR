@@ -488,7 +488,9 @@ public:
    * are the mesh, the current and previous solutions, and the content of the
    * time handler. All other data (dof_handler, finite element spaces,
    * constraints, etc.) can be recomputed when the simulation restarts. See also
-   * step 83 for a discussion on this topic.
+   * step 83 for a discussion on this topic. With AMR, the solutions are
+   * attached to the p4est triangulation instead, so that the simulation can
+   * restart with a different number of MPI processes.
    */
   void checkpoint();
 
