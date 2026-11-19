@@ -1179,6 +1179,7 @@ namespace Parameters
   {
     prm.enter_subsection("Nonlinear solver");
     {
+      DECLARE_VERBOSITY_PARAM(prm, "verbose")
       prm.declare_entry("tolerance",
                         "1e-10",
                         Patterns::Double(),
@@ -1191,15 +1192,31 @@ namespace Parameters
                         "1",
                         Patterns::Integer(),
                         "Maximum number of Newton iterations");
-      prm.declare_entry("enable_line_search",
-                        "true",
-                        Patterns::Bool(),
-                        "Enable line search");
       prm.declare_entry(
         "analytic_jacobian",
         "true",
         Patterns::Bool(),
         "Compute exact Jacobian matrix. If false, use finite differences.");
+      prm.enter_subsection("Line search");
+      {
+        prm.declare_entry("enable",
+                          "true",
+                          Patterns::Bool(),
+                          "Enable line search");
+        prm.declare_entry(
+          "max backtrack steps",
+          "4",
+          Patterns::Integer(1),
+          "Maximum number of trials when backtracking, including alpha = 1. "
+          "Each rejection halves alpha.");
+        prm.declare_entry("memory",
+                          "3",
+                          Patterns::Integer(1),
+                          "Number of recent accepted residuals in the line "
+                          "search reference. 1 enforces monotone decrease. "
+                          "History resets at each nonlinear solve.");
+      }
+      prm.leave_subsection();
       prm.enter_subsection("reassembly heuristic");
       {
         prm.declare_entry(
@@ -1210,7 +1227,6 @@ namespace Parameters
           "the previous residual norm, reassemble the matrix.");
       }
       prm.leave_subsection();
-      DECLARE_VERBOSITY_PARAM(prm, "verbose")
       prm.declare_entry("compare jacobian matrix with finite differences",
                         "false",
                         Patterns::Bool(),
@@ -1239,17 +1255,24 @@ namespace Parameters
   {
     prm.enter_subsection("Nonlinear solver");
     {
+      READ_VERBOSITY_PARAM(prm, verbosity)
       tolerance            = prm.get_double("tolerance");
       divergence_tolerance = prm.get_double("divergence_tolerance");
       max_iterations       = prm.get_integer("max_iterations");
-      enable_line_search   = prm.get_bool("enable_line_search");
       analytic_jacobian    = prm.get_bool("analytic_jacobian");
+      prm.enter_subsection("Line search");
+      {
+        line_search.enable = prm.get_bool("enable");
+        line_search.max_backtrack_steps =
+          prm.get_integer("max backtrack steps");
+        line_search.memory = prm.get_integer("memory");
+      }
+      prm.leave_subsection();
       prm.enter_subsection("reassembly heuristic");
       {
         reassembly_decrease_tol = prm.get_double("decrease tolerance");
       }
       prm.leave_subsection();
-      READ_VERBOSITY_PARAM(prm, verbosity)
       compare_jacobian_with_finite_differences =
         prm.get_bool("compare jacobian matrix with finite differences");
       analytical_jacobian_absolute_tolerance =
@@ -1271,14 +1294,41 @@ namespace Parameters
                         "direct_mumps",
                         Patterns::Selection("direct_mumps|cg|gmres"),
                         "Method");
-      prm.declare_entry("tolerance",
+      prm.declare_entry("preconditioner",
+                        "none",
+                        Patterns::Selection("none|ilu|block_jacobi|amg"),
+                        "Method");
+      prm.declare_entry("absolute tolerance",
+                        "1e-12",
+                        Patterns::Double(0.),
+                        "Absolute tolerance for iterative solver. The solver "
+                        "stops when the residual norm is below this value, or "
+                        "below the relative tolerance times the initial "
+                        "residual norm.");
+      prm.declare_entry("relative tolerance",
                         "1e-6",
-                        Patterns::Double(),
-                        "Tolerance for iterative solver");
+                        Patterns::Double(0.),
+                        "Relative tolerance for iterative solver, with respect "
+                        "to the initial residual norm (the norm of the "
+                        "right-hand side, since the initial guess is zero). "
+                        "Set to 0 to use only the absolute tolerance.");
       prm.declare_entry("max iterations",
                         "100",
                         Patterns::Integer(),
                         "Max number of outer iterations for iterative solver");
+      prm.declare_entry("max krylov vectors",
+                        "100",
+                        Patterns::Integer(1),
+                        "Number of Krylov vectors stored before restarting "
+                        "GMRES (restart length). Unused by CG.");
+      prm.declare_entry("right preconditioning",
+                        "true",
+                        Patterns::Bool(),
+                        "Use right preconditioning for GMRES, so that the "
+                        "tolerances apply to the true (unpreconditioned) "
+                        "residual. If false, left preconditioning is used and "
+                        "the tolerances apply to the preconditioned residual. "
+                        "Unused by CG.");
       prm.declare_entry("ilu fill level",
                         "0",
                         Patterns::Integer(),
@@ -1304,10 +1354,28 @@ namespace Parameters
           method = Method::cg;
         else if (parsed_method == "gmres")
           method = Method::gmres;
-        tolerance      = prm.get_double("tolerance");
-        max_iterations = prm.get_integer("max iterations");
-        ilu_fill_level = prm.get_integer("ilu fill level");
-        reuse          = prm.get_bool("reuse");
+
+        const std::string parsed_prec = prm.get("preconditioner");
+        if (parsed_prec == "none")
+          preconditioner = PreconditionerType::none;
+        else if (parsed_prec == "ilu")
+          preconditioner = PreconditionerType::ilu;
+        else if (parsed_prec == "block_jacobi")
+          preconditioner = PreconditionerType::block_jacobi;
+        else if (parsed_prec == "amg")
+          preconditioner = PreconditionerType::amg;
+        else
+          AssertThrow(false,
+                      ExcMessage("Unknown preconditioner type: " +
+                                 parsed_prec));
+
+        absolute_tolerance    = prm.get_double("absolute tolerance");
+        relative_tolerance    = prm.get_double("relative tolerance");
+        max_iterations        = prm.get_integer("max iterations");
+        max_krylov_vectors    = prm.get_integer("max krylov vectors");
+        right_preconditioning = prm.get_bool("right preconditioning");
+        ilu_fill_level        = prm.get_integer("ilu fill level");
+        reuse                 = prm.get_bool("reuse");
         READ_VERBOSITY_PARAM(prm, verbosity)
       }
       prm.leave_subsection();

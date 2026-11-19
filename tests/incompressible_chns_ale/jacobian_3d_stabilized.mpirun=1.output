@@ -14,33 +14,28 @@ Number of degrees of freedom: 224
 Time step 1 - Advancing to t = 0.001.
 Max absolute error analytical vs fd matrix is 9.7785e-08
 Newton iter.  0:          nonlinear residual = 2.52089846e-01
-	Line search with alpha = 1.000 : res = 1.88005116e-04
 Newton iter.  1:          nonlinear residual = 1.88005116e-04	(M)
-	Line search with alpha = 1.000 : res = 1.54076575e-11
+Newton iter.  2:          nonlinear residual = 1.54076547e-11	(M)
 Stopping because residual is below prescribed tolerance (1.00e-10)
 
 Time step 2 - Advancing to t = 1.00e-02.
 Max absolute error analytical vs fd matrix is 7.86e-08
 Newton iter.  0:          nonlinear residual = 1.23022116e+00
-	Line search with alpha = 1.000 : res = 2.07007209e-03
 Newton iter.  1:          nonlinear residual = 2.07007209e-03	(M)
-	Line search with alpha = 1.000 : res = 6.15513031e-09
 Newton iter.  2:          nonlinear residual = 6.15513031e-09	(M)
-	Line search with alpha = 1.000 : res = 1.38036160e-15
+Newton iter.  3:          nonlinear residual = 8.30760218e-16	(M)
 Stopping because residual is below prescribed tolerance (1.00e-10)
 
 Time step 3 - Advancing to t = 2.00e-02.
 Max absolute error analytical vs fd matrix is 1.96e-08
 Newton iter.  0:          nonlinear residual = 5.33701560e-01
-	Line search with alpha = 1.000 : res = 3.51819588e-04
 Newton iter.  1:          nonlinear residual = 3.51819588e-04	(M)
-	Line search with alpha = 1.000 : res = 2.53793664e-11
+Newton iter.  2:          nonlinear residual = 2.53793677e-11	(M)
 Stopping because residual is below prescribed tolerance (1.00e-10)
 
 Time step 4 - Advancing to t = 3.00e-02.
 Max absolute error analytical vs fd matrix is 1.88e-08
 Newton iter.  0:          nonlinear residual = 2.18611901e-01
-	Line search with alpha = 1.000 : res = 1.01309650e-04
 Newton iter.  1:          nonlinear residual = 1.01309650e-04	(M)
-	Line search with alpha = 1.000 : res = 1.32540518e-11
+Newton iter.  2:          nonlinear residual = 1.32540492e-11	(M)
 Stopping because residual is below prescribed tolerance (1.00e-10)

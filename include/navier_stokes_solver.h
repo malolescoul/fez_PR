@@ -186,6 +186,13 @@ public:
   virtual void setup_assemblers() = 0;
 
   /**
+   * Check whether the evaluation_point yields a well-defined residual. For
+   * solvers with a moving mesh, this checks if the position variable stored in
+   * evaluation_point yields a valid mesh at a given set of quadrature points.
+   */
+  bool evaluation_point_is_valid() const override;
+
+  /**
    * For solvers with hp capabilities, set the active fe index on each owned
    * mesh element.
    *
@@ -316,7 +323,18 @@ public:
   /**
    * Solve the linear system for a single nonlinear solver iteration.
    */
-  virtual void solve_linear_system() override;
+  virtual void solve_linear_system() override final;
+
+  /**
+   * Solve the linear system for a single nonlinear solver iteration
+   * using an iterative solver (e.g., GMRES).
+   *
+   * Although this function is not pure virtual, the base class does not provide
+   * a default implementation and will throw if called. Each derived solver
+   * should specify which choices of iterative solvers and preconditioners are
+   * suitable.
+   */
+  virtual void solve_linear_system_iterative();
 
   /**
    * Post-process the numerical solution: output for visualization,
@@ -626,6 +644,7 @@ protected:
 
   SolverControl                                          solver_control;
   std::unique_ptr<PETScWrappers::SparseDirectMUMPSReuse> direct_solver_reuse;
+  bool should_assemble_preconditioner;
 
   std::unique_ptr<PostProcessingHandler<dim>>     postproc_handler;
   typename PostProcessingHandler<dim>::PrefixData prefix_data;
@@ -659,6 +678,12 @@ NavierStokesSolver<dim, with_moving_mesh>::get_nonzero_constraints()
 {
   return nonzero_constraints;
 }
+
+template <int dim, bool with_moving_mesh>
+void NavierStokesSolver<dim, with_moving_mesh>::solve_linear_system_iterative()
+{
+  AssertThrow(false, ExcPureFunctionCalled());
+};
 
 template <int dim, bool with_moving_mesh>
 void NavierStokesSolver<dim, with_moving_mesh>::write_forces(

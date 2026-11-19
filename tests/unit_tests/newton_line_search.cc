@@ -76,7 +76,7 @@ struct Case
   double                        expected;
   bool                          converges;
   bool                          line_search          = true;
-  unsigned int                  max_iterations       = 0;
+  unsigned int                  max_iterations       = 1;
   double                        divergence_tolerance = 1e10;
 };
 
@@ -87,9 +87,11 @@ void check_case(const Case &test, const bool adaptive)
   nonlinear.divergence_tolerance = test.divergence_tolerance;
   nonlinear.max_iterations =
     test.line_search ? test.max_iterations : 1; // One correction by default.
-  nonlinear.enable_line_search      = test.line_search;
-  nonlinear.verbosity               = Parameters::Verbosity::quiet;
-  nonlinear.reassembly_decrease_tol = 0.1;
+  nonlinear.line_search.enable              = test.line_search;
+  nonlinear.line_search.memory              = 1;
+  nonlinear.line_search.max_backtrack_steps = 4;
+  nonlinear.verbosity                       = Parameters::Verbosity::quiet;
+  nonlinear.reassembly_decrease_tol         = 0.1;
 
   Parameters::TimeIntegration time{};
   time.scheme           = adaptive ? Parameters::TimeIntegration::Scheme::BDF1 :
@@ -184,7 +186,7 @@ int main(int argc, char **argv)
      false},
     {"finite decreasing trials",
      [](double x) { return x == 0. ? 10. : 4. + 4. * x; },
-     .125,
+     1.,
      false},
     {"finite trial then invalid trials",
      [=](double x) { return x == 0. ? 10. : (x == 1. ? 2. : nan); },
@@ -198,10 +200,9 @@ int main(int argc, char **argv)
      0.,
      false,
      false}};
-  // After an Armijo step, exhausted finite trials must refresh the residual.
-  // The true norm 15 exceeds the divergence threshold; a stale norm of 5
-  // would incorrectly permit another correction to the artificial root.
-  cases.push_back({"fresh residual after fallback",
+  // After accepting x=1 (residual 5), every next trial exceeds the
+  // divergence threshold. Restore x=1; no rejected trial may be committed.
+  cases.push_back({"reject trials above divergence limit",
                    [](double x) {
                      if (x == 0.)
                        return 100.;
@@ -217,7 +218,7 @@ int main(int argc, char **argv)
                        return 15.;
                      return 0.;
                    },
-                   1.125,
+                   1.,
                    false,
                    true,
                    3,

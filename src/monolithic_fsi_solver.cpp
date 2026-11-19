@@ -27,6 +27,8 @@
 #include <scratch_data.h>
 #include <utilities.h>
 
+#include <algorithm>
+
 template <int dim>
 FSISolver<dim>::FSISolver(const ParameterReader<dim> &param)
   : NavierStokesSolver<dim, true>(param)
@@ -130,6 +132,14 @@ FSISolver<dim>::FSISolver(const ParameterReader<dim> &param)
         this->pcout << "\t    Center of rotation:" << fsi.rotation.center
                     << std::endl;
     }
+
+  // Rigid-body rotation is only implemented with the all-to-all coupling (the
+  // other couplings would require torque accumulators).
+  AssertThrow(!fsi.rotation.enable ||
+                fsi.coupling == Coupling::all_position_to_all_lambda,
+              ExcMessage(
+                "Rigid-body rotation is currently only implemented with the "
+                "all_position_to_all_lambda coupling scheme."));
 
   /**
    * While different coupling schemes are still being tested, keep the debug
@@ -416,8 +426,10 @@ FSISolver<dim>::find_unused_lagrange_multiplier_dofs(
     DoFTools::extract_boundary_dofs(*this->dof_handler,
                                     this->lambda_mask,
                                     {boundary_to_avoid});
-  lambda_dofs_on_boundary = lambda_dofs_on_boundary & this->locally_owned_dofs;
   {
+    // Exchange the relevant boundary dofs *before* restricting to the owned
+    // ones, so that owned dofs on boundary edges only seen as boundary dofs by
+    // other ranks are also collected.
     const auto gathered_lambda_bdr_dofs =
       Utilities::MPI::all_gather(this->mpi_communicator,
                                  lambda_dofs_on_boundary.get_index_vector());
@@ -426,6 +438,7 @@ FSISolver<dim>::find_unused_lagrange_multiplier_dofs(
         if (this->locally_owned_dofs.is_element(dof))
           lambda_dofs_on_boundary.add_index(dof);
   }
+  lambda_dofs_on_boundary = lambda_dofs_on_boundary & this->locally_owned_dofs;
 
   if (n_required_dofs == 0)
     return unused_dofs;
@@ -499,6 +512,11 @@ FSISolver<dim>::find_unused_lagrange_multiplier_dofs(
                    */
                   if (this->locally_owned_dofs.is_element(dof))
                   {
+                    // A shared edge or vertex can be visited on several faces.
+                    if (std::find(unused_dofs.begin(),
+                                  unused_dofs.end(),
+                                  dof) != unused_dofs.end())
+                      continue;
                     unused_dofs.push_back(dof);
                     if (unused_dofs.size() == n_required_dofs)
                       goto all_dofs_found;
@@ -592,8 +610,9 @@ void FSISolver<dim>::create_position_lagrange_mult_coupling_data()
     DoFTools::extract_boundary_dofs(*this->dof_handler,
                                     this->position_mask,
                                     {weak_no_slip_boundary_id});
-  local_position_dofs = local_position_dofs & this->locally_owned_dofs;
   {
+    // Exchange the relevant boundary dofs *before* restricting to the owned
+    // ones, otherwise the gathered sets only contain dofs owned by other ranks.
     std::vector<std::vector<types::global_dof_index>> gathered_pos_bdr_dofs =
       Utilities::MPI::all_gather(this->mpi_communicator,
                                  local_position_dofs.get_index_vector());
@@ -602,6 +621,7 @@ void FSISolver<dim>::create_position_lagrange_mult_coupling_data()
         if (this->locally_owned_dofs.is_element(dof))
           local_position_dofs.add_index(dof);
   }
+  local_position_dofs = local_position_dofs & this->locally_owned_dofs;
 
   const bool has_owned_position_dofs_on_boundary =
     local_position_dofs.n_elements() > 0;
@@ -2922,7 +2942,7 @@ void FSISolver<dim>::compare_forces_and_position_on_obstacle() const
                     this->initial_positions.at(face_dofs[i_dof])[d];
                   max_diff_local[d] =
                     std::max(max_diff_local[d],
-                             cylinder_displacement_local[d] - displ);
+                             std::abs(cylinder_displacement_local[d] - displ));
                 }
               }
             }
@@ -2967,6 +2987,13 @@ void FSISolver<dim>::compare_forces_and_position_on_obstacle() const
                   mpi_maxabs,
                   this->mpi_communicator);
 
+    // Also compare the displacement on this rank with the synchronized one, to
+    // detect differences between ranks.
+    if (!first_computed_displacement[d])
+      max_diff_local[d] = std::max(max_diff_local[d],
+                                   std::abs(cylinder_displacement_local[d] -
+                                            cylinder_displacement[d]));
+
     // Take the max between all max differences disp_i - disp_j
     // for x_i and x_j both on the cylinder.
     // Checks that all displacement are identical.
@@ -2978,6 +3005,8 @@ void FSISolver<dim>::compare_forces_and_position_on_obstacle() const
     if (std::abs(cylinder_displacement[d]) > 1e-7)
       ratio[d] = lambda_integral[d] / cylinder_displacement[d];
   }
+
+  MPI_Op_free(&mpi_maxabs);
 
   if (this->param.fsi.verbosity == Parameters::Verbosity::verbose)
   {
@@ -3105,7 +3134,9 @@ void FSISolver<dim>::check_manufactured_solution_boundary()
   lambda_integral_local    = 0;
   pns_integral_local       = 0;
 
-  const double mu = this->param.physical_properties.fluids[0].dynamic_viscosity;
+  // Kinematic viscosity, consistent with the kinematic form of the equations
+  const double nu =
+    this->param.physical_properties.fluids[0].kinematic_viscosity;
 
   FEFaceValues<dim> fe_face_values(*this->moving_mapping,
                                    *fe,
@@ -3152,7 +3183,7 @@ void FSISolver<dim>::check_manufactured_solution_boundary()
             this->exact_solution->value(qpoint, this->ordering->p_lower);
 
           std::static_pointer_cast<FSIExactSolution<dim>>(this->exact_solution)
-            ->lagrange_multiplier(qpoint, mu, normal_to_solid, lambda_MMS);
+            ->lagrange_multiplier(qpoint, nu, normal_to_solid, lambda_MMS);
 
           // Increment the integrals of lambda:
 
@@ -3303,10 +3334,10 @@ void FSISolver<dim>::compute_lambda_error_on_boundary(
   exact_integral_local  = 0;
 
 #if !defined(LAGRANGE_MULTIPLIER_WITH_SOURCE_TERM)
-  const double rho = this->param.physical_properties.fluids[0].density;
+  // The equations are solved in kinematic form (pressure is p/rho), so the
+  // exact traction must use the kinematic viscosity.
   const double nu =
     this->param.physical_properties.fluids[0].kinematic_viscosity;
-  const double mu = nu * rho;
 #endif
 
   FEFaceValues<dim> fe_face_values(*this->moving_mapping,
@@ -3367,7 +3398,7 @@ void FSISolver<dim>::compute_lambda_error_on_boundary(
           // lambda_MMS is not prescribed, the exact lambda is expected to be
           // the traction
           std::static_pointer_cast<FSIExactSolution<dim>>(this->exact_solution)
-            ->lagrange_multiplier(qpoint, mu, normal_to_solid, exact);
+            ->lagrange_multiplier(qpoint, nu, normal_to_solid, exact);
 #endif
 
           diff = lambda_values[q] - exact;

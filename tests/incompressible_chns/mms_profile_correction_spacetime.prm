@@ -35,8 +35,11 @@ subsection Nonlinear solver
   set tolerance            = 1e-10
   set divergence_tolerance = 1e+4
   set max_iterations       = 50
-  set enable_line_search   = false
-  set analytic_jacobian    = true
+
+  subsection Line search
+    set enable = false
+  end
+  set analytic_jacobian = true
 end
 
 subsection Linear solver
@@ -61,10 +64,12 @@ end
 
 subsection Physical properties
   set number of fluids = 2
+
   subsection Fluid 0
     set density             = 1.1
     set kinematic viscosity = 2
   end
+
   subsection Fluid 1
     set density             = 1
     set kinematic viscosity = 1
@@ -73,13 +78,14 @@ subsection Physical properties
 end
 
 subsection Cahn Hilliard
-  set enable profile correction = true
+  set enable profile correction   = true
   set profile correction strength = 0.6
+
   subsection mobility
-    set model = Adaptive normal velocity
-    set scaling factor = 0.4
+    set model                   = Adaptive normal velocity
+    set scaling factor          = 0.4
     set mobility regularization = 0.001
-    set Function expression = 0.1*(1-x*x)^2
+    set Function expression     = 0.1*(1-x*x)^2
   end
   set surface tension     = 1
   set interface thickness = 0.3
@@ -90,24 +96,28 @@ subsection Initial conditions
 end
 
 subsection Fluid boundary conditions
-  set number = 4
+  set number                     = 4
   set fix pressure constant      = true
   set enforce zero mean pressure = false
+
   subsection boundary 0
     set id   = 0
     set name = x_min
     set type = velocity_mms
   end
+
   subsection boundary 1
     set id   = 1
     set name = x_max
     set type = velocity_mms
   end
+
   subsection boundary 2
     set id   = 2
     set name = y_min
     set type = velocity_mms
   end
+
   subsection boundary 3
     set id   = 3
     set name = y_max
@@ -117,21 +127,25 @@ end
 
 subsection CahnHilliard boundary conditions
   set number = 4
+
   subsection boundary 0
     set id   = 0
     set name = x_min
     set type = dirichlet_mms
   end
+
   subsection boundary 1
     set id   = 1
     set name = x_max
     set type = dirichlet_mms
   end
+
   subsection boundary 2
     set id   = 2
     set name = y_min
     set type = dirichlet_mms
   end
+
   subsection boundary 3
     set id   = 3
     set name = y_max
@@ -143,12 +157,15 @@ subsection Exact solution
   subsection exact velocity
     set Function expression = 0.3+0.1*sin(pi*x)*cos(pi*y)*(1+sin(2*t)); 0.2-0.1*cos(pi*x)*sin(pi*y)*(1+sin(2*t))
   end
+
   subsection exact pressure
     set Function expression = 0.1*sin(pi*x)*sin(pi*y)*(1+sin(2*t))
   end
+
   subsection exact cahn hilliard tracer
     set Function expression = 0.2*sin(pi*x)*cos(pi*y)*(1+sin(2*t))
   end
+
   subsection exact cahn hilliard potential
     set Function expression = 0.1*sin(pi*x)*sin(pi*y)*(1+sin(2*t))
   end
