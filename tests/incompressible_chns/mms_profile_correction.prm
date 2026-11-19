@@ -35,8 +35,11 @@ subsection Nonlinear solver
   set tolerance            = 1e-12
   set divergence_tolerance = 1e+4
   set max_iterations       = 50
-  set enable_line_search   = true
-  set analytic_jacobian    = true
+
+  subsection Line search
+    set enable = true
+  end
+  set analytic_jacobian = true
 end
 
 subsection Linear solver
@@ -73,8 +76,10 @@ subsection Physical properties
 end
 
 subsection Cahn Hilliard
-  set enable profile correction = true
-  set profile correction strength = 0.6
+  subsection profile correction
+    set enable profile correction   = true
+    set profile correction strength = 0.6
+  end
   subsection mobility
     set constant value = 0.1
     set model = Adaptive normal velocity

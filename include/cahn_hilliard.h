@@ -63,12 +63,25 @@ namespace CahnHilliard
     }
   };
 
+  /** Gradient floor of the profile flux, in 1/length units.
+   * Fixed internal numerical scale; there is no user-facing parameter.
+   */
+  inline double profile_correction_gradient_floor(const double epsilon)
+  {
+    return 1e-4 / epsilon;
+  }
+
   /**
-   * Regularized profile flux F = a(phi)*(1-c*q/R)*grad(phi), where
-   * q=(1-phi^2)/(sqrt(2)*epsilon), R^2=|grad(phi)|^2+beta^2*q^2 and
-   * c=sqrt(1+beta^2). Thus F vanishes for the equilibrium tanh profile.
-   * The C2 activation a turns the correction off near the pure phases;
-   * beta regularizes the normal where the phase gradient vanishes.
+   * Regularized profile flux F = (1-Q/R)*grad(phi), where
+   * q=(1-phi^2)/(sqrt(2)*epsilon), R^2=|grad(phi)|^2+beta^2*q^2+delta^2 and
+   * Q^2=(1+beta^2)*q^2+delta^2. Thus F vanishes whenever |grad(phi)|=|q|,
+   * in particular for the equilibrium tanh profile, and in uniform phases.
+   * beta regularizes the normal where the phase gradient vanishes, and delta is
+   * the gradient floor above: the anti-diffusive slope 1-Q/R at grad(phi)=0
+   * tends to zero in the pure phases instead of the q-independent value
+   * 1-sqrt(1+beta^2)/beta. Beyond |phi|=1, q is replaced by zero: the flux is
+   * purely diffusive there, so overshoots are never sharpened. As only q^2
+   * enters, F and its divergence are continuous across |phi|=1.
    * The caller supplies the global mobility amplitude separately.
    * When requested, compute the derivatives once for all trial functions.
    */
@@ -83,31 +96,16 @@ namespace CahnHilliard
   {
     if (linearization)
       *linearization = {};
-    constexpr double beta         = 0.05;
-    constexpr double tail         = 1. - 0.999 * 0.999;
-    const double     phase_factor = 1. - phi * phi;
-    if (phase_factor <= 0.25 * tail)
-      return {};
-
-    double a = 1., da = 0., dda = 0.;
-    if (phase_factor < 0.5 * tail)
-    {
-      const double width = 0.25 * tail;
-      const double t     = (phase_factor - width) / width;
-      const double dt    = -2. * phi / width;
-      const double first = 30. * t * t * (t - 1.) * (t - 1.);
-      a                  = t * t * t * (10. + t * (-15. + 6. * t));
-      da                 = first * dt;
-      if (linearization && compute_divergence)
-        dda =
-          60. * t * (2. * t * t - 3. * t + 1.) * dt * dt - 2. * first / width;
-    }
-    const double           q = phase_factor / (std::sqrt(2.) * epsilon);
-    const double           s = gradient.norm_square();
-    const double           R = std::sqrt(s + beta * beta * q * q);
-    const double           c = std::sqrt(1. + beta * beta);
-    const double           b = 1. - c * q / R;
-    const double           f = a * b;
+    constexpr double beta     = 0.05;
+    constexpr double c2       = 1. + beta * beta;
+    const double     delta    = profile_correction_gradient_floor(epsilon);
+    const bool       interior = phi * phi < 1.;
+    const double     q =
+      interior ? (1. - phi * phi) / (std::sqrt(2.) * epsilon) : 0.;
+    const double s = gradient.norm_square();
+    const double R = std::sqrt(s + beta * beta * q * q + delta * delta);
+    const double Q = std::sqrt(c2 * q * q + delta * delta);
+    const double f = 1. - Q / R;
     ProfileCorrection<dim> result;
     result.flux = f * gradient;
     if (!compute_divergence && !linearization)
@@ -115,12 +113,14 @@ namespace CahnHilliard
 
     // With F = f(phi,s)*grad(phi), s=|grad(phi)|^2, its divergence is
     // f*tr(H) + f_phi*s + 2*f_s*grad(phi).H.grad(phi).
-    const double dq     = -2. * phi / (std::sqrt(2.) * epsilon);
+    // u=q*dq/dphi; Q_phi=c2*u/Q and R_phi=beta^2*u/R.
+    const double dq     = interior ? -2. * phi / (std::sqrt(2.) * epsilon) : 0.;
+    const double u      = q * dq;
+    const double Q_phi  = c2 * u / Q;
+    const double R_phi  = beta * beta * u / R;
     const double inv_R3 = 1. / (R * R * R);
-    const double b_phi  = -c * dq * s * inv_R3;
-    const double b_s    = 0.5 * c * q * inv_R3;
-    const double f_phi  = da * b + a * b_phi;
-    const double f_s    = a * b_s;
+    const double f_phi  = -Q_phi / R + Q * R_phi / (R * R);
+    const double f_s    = 0.5 * Q * inv_R3;
     const auto   Hg     = hessian * gradient;
     const double gHg    = gradient * Hg;
     if (compute_divergence)
@@ -134,15 +134,18 @@ namespace CahnHilliard
         linearization->flux_gradient[d][d] += f;
       if (compute_divergence)
       {
-        const double ddq    = -2. / (std::sqrt(2.) * epsilon);
+        // Only the second phi-derivative jumps at |phi|=1.
+        const double ddq    = interior ? -2. / (std::sqrt(2.) * epsilon) : 0.;
         const double inv_R5 = inv_R3 / (R * R);
-        const double b_pp =
-          -c * s * (ddq * inv_R3 - 3. * beta * beta * q * dq * dq * inv_R5);
-        const double b_ps = -c * dq * (inv_R3 - 1.5 * s * inv_R5);
-        const double b_ss = -0.75 * c * q * inv_R5;
-        const double f_pp = dda * b + 2. * da * b_phi + a * b_pp;
-        const double f_ps = da * b_s + a * b_ps;
-        const double f_ss = a * b_ss;
+        const double du     = dq * dq + q * ddq;
+        const double Q_pp   = c2 * du / Q - c2 * c2 * u * u / (Q * Q * Q);
+        const double R_pp =
+          beta * beta * du / R - std::pow(beta, 4) * u * u * inv_R3;
+        const double f_pp = -Q_pp / R + 2. * Q_phi * R_phi / (R * R) +
+                            Q * R_pp / (R * R) -
+                            2. * Q * R_phi * R_phi * inv_R3;
+        const double f_ps = 0.5 * Q_phi * inv_R3 - 1.5 * Q * R_phi * inv_R3 / R;
+        const double f_ss = -0.75 * Q * inv_R5;
         linearization->divergence_phi =
           f_phi * trace(hessian) + f_pp * s + 2. * f_ps * gHg;
         linearization->divergence_gradient =
