@@ -16,6 +16,7 @@
 #include <parameters.h>
 #include <types.h>
 
+#include <algorithm>
 #include <type_traits>
 
 // Forward declaration
@@ -190,6 +191,36 @@ namespace PostProcessingTools
                          const Quadrature<dim>            &cell_quadrature,
                          const VectorType                 &solution,
                          const FEValuesExtractors::Vector &velocity_extractor);
+
+  /**
+   * Compute the maximum CHNS interface CFL number
+   *
+   *   dt * max |(u - w) . n| / epsilon,  n = grad(phi) / |grad(phi)|,
+   *
+   * over the quadrature points where |phi| < phase_threshold. This is the
+   * normal displacement of the diffuse profile during one step, in units of
+   * its thickness, which does not depend on the mesh size. Only the normal
+   * velocity changes phi, since d(phi)/dt = -(u - w) . grad(phi) for a
+   * transported profile. Where grad(phi) vanishes, |u - w| is used instead.
+   *
+   * The mesh velocity w is the BDF derivative of the position field, with
+   * the given coefficients and previous solutions, if a position extractor is
+   * given, and zero otherwise.
+   */
+  template <int dim, typename VectorType>
+  double compute_max_interface_cfl(
+    const double                      timestep,
+    const Mapping<dim>               &mapping,
+    const DoFHandler<dim>            &dof_handler,
+    const Quadrature<dim>            &cell_quadrature,
+    const VectorType                 &solution,
+    const FEValuesExtractors::Vector &velocity_extractor,
+    const FEValuesExtractors::Scalar &tracer_extractor,
+    const double                      epsilon,
+    const FEValuesExtractors::Vector *position_extractor = nullptr,
+    const std::vector<double>        &bdf_coefficients   = {},
+    const std::vector<VectorType>    &previous_solutions = {},
+    const double                      phase_threshold    = 0.99);
 
   enum class SliceAxis : unsigned int
   {
@@ -737,6 +768,93 @@ double PostProcessingTools::compute_max_cfl(
     hp::QCollection<dim>(cell_quadrature),
     solution,
     velocity_extractor);
+}
+
+template <int dim, typename VectorType>
+double PostProcessingTools::compute_max_interface_cfl(
+  const double                      timestep,
+  const Mapping<dim>               &mapping,
+  const DoFHandler<dim>            &dof_handler,
+  const Quadrature<dim>            &cell_quadrature,
+  const VectorType                 &solution,
+  const FEValuesExtractors::Vector &velocity_extractor,
+  const FEValuesExtractors::Scalar &tracer_extractor,
+  const double                      epsilon,
+  const FEValuesExtractors::Vector *position_extractor,
+  const std::vector<double>        &bdf_coefficients,
+  const std::vector<VectorType>    &previous_solutions,
+  const double                      phase_threshold)
+{
+  AssertDimension(solution.size(), dof_handler.n_dofs());
+  Assert(epsilon > 0., ExcMessage("The interface thickness must be positive."));
+  Assert(!position_extractor ||
+           bdf_coefficients.size() == previous_solutions.size() + 1,
+         ExcMessage("The mesh velocity requires one BDF coefficient per "
+                    "present and previous solution."));
+
+  // hp::FEValues keeps references to the collections
+  const hp::MappingCollection<dim> mapping_collection(mapping);
+  const hp::QCollection<dim>       quadrature_collection(cell_quadrature);
+  hp::FEValues<dim>                hp_fe_values(mapping_collection,
+                                 dof_handler.get_fe_collection(),
+                                 quadrature_collection,
+                                 update_values | update_gradients);
+
+  double                      local_max_speed = 0.;
+  std::vector<Tensor<1, dim>> velocity, position, previous_position;
+  std::vector<double>         phi;
+  std::vector<Tensor<1, dim>> grad_phi;
+
+  for (const auto &cell : dof_handler.active_cell_iterators() |
+                            IteratorFilters::LocallyOwnedCell())
+  {
+    hp_fe_values.reinit(cell);
+    const FEValues<dim> &fe_values = hp_fe_values.get_present_fe_values();
+    const unsigned int   n_q       = fe_values.n_quadrature_points;
+
+    phi.resize(n_q);
+    fe_values[tracer_extractor].get_function_values(solution, phi);
+    if (std::none_of(phi.begin(), phi.end(), [&](const double p) {
+          return std::abs(p) < phase_threshold;
+        }))
+      continue;
+
+    velocity.resize(n_q);
+    grad_phi.resize(n_q);
+    fe_values[velocity_extractor].get_function_values(solution, velocity);
+    fe_values[tracer_extractor].get_function_gradients(solution, grad_phi);
+
+    // Relative velocity u - w, with w from the BDF derivative of the position
+    if (position_extractor)
+    {
+      position.resize(n_q);
+      previous_position.resize(n_q);
+      fe_values[*position_extractor].get_function_values(solution, position);
+      for (unsigned int q = 0; q < n_q; ++q)
+        velocity[q] -= bdf_coefficients[0] * position[q];
+      for (unsigned int i = 0; i < previous_solutions.size(); ++i)
+      {
+        fe_values[*position_extractor].get_function_values(
+          previous_solutions[i], previous_position);
+        for (unsigned int q = 0; q < n_q; ++q)
+          velocity[q] -= bdf_coefficients[i + 1] * previous_position[q];
+      }
+    }
+
+    for (unsigned int q = 0; q < n_q; ++q)
+      if (std::abs(phi[q]) < phase_threshold)
+      {
+        const double gradient_norm = grad_phi[q].norm();
+        const double speed =
+          gradient_norm > 0. ?
+            std::abs(velocity[q] * grad_phi[q]) / gradient_norm :
+            velocity[q].norm();
+        local_max_speed = std::max(local_max_speed, speed);
+      }
+  }
+
+  return Utilities::MPI::max(local_max_speed * timestep / epsilon,
+                             dof_handler.get_mpi_communicator());
 }
 
 template <int dim, int n_phases, typename VectorType>

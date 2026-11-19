@@ -790,10 +790,13 @@ namespace Parameters
       // - adapt based on an estimate of the BDF truncation error
       // - adapt based on the maximum CFL number (only for solvers with
       //   a velocity variable)
+      // - adapt based on the maximum CHNS interface CFL number (only for
+      //   solvers with a velocity and a phase tracer)
       enum class AdaptationStrategy
       {
         BDFTruncationError,
-        CFL
+        CFL,
+        InterfaceCFL
       } strategy;
 
       double max_timestep;
@@ -810,6 +813,11 @@ namespace Parameters
       double target_cfl;
       bool   reject_timestep_with_large_cfl;
       double reject_cfl_factor;
+
+      // Parameter for adaptation based on the CHNS interface CFL number
+      // dt * max |(u - w) . n| / epsilon, evaluated where |phi| < 0.99.
+      // The CFL rejection parameters above also apply to this strategy.
+      double target_interface_cfl;
 
       // FIXME: Both parameters below are currently unused:
       // required_times because it is tricky to adjust or merge the time steps

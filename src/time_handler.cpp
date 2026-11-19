@@ -34,6 +34,7 @@ TimeHandler::TimeHandler(const Parameters::TimeIntegration &time_parameters)
   , n_rejected_steps(0)
   , last_nonlinear_solver_converged(true)
   , max_cfl_number(0.)
+  , max_interface_cfl_number(0.)
 {
   if (!steady_scheme)
   {
@@ -132,6 +133,18 @@ void TimeHandler::validate_parameters(const ComponentOrdering &ordering) const
         "with a solver which does not solve for the velocity variable. "
         "The alternative is to adapt based on the BDF truncation error, "
         "by setting \"set adaptation strategy = bdf truncation error\"."));
+  if (time_parameters.adaptation.strategy ==
+      Parameters::TimeIntegration::Adaptation::AdaptationStrategy::InterfaceCFL)
+  {
+    AssertThrow(ordering.has_variable(SolverInfo::VariableType::velocity) &&
+                  ordering.has_variable(SolverInfo::VariableType::phase_tracer),
+                ExcMessage("The \"interface cfl\" time step adaptation "
+                           "strategy requires a velocity and a phase tracer "
+                           "(CHNS solvers)."));
+    AssertThrow(time_parameters.adaptation.target_interface_cfl > 0.,
+                ExcMessage(
+                  "The target interface CFL number must be positive."));
+  }
 }
 
 bool TimeHandler::is_steady() const
@@ -401,6 +414,26 @@ bool TimeHandler::is_timestep_accepted(
     }
   }
 
+  if (time_parameters.adaptation.strategy == Strategy::InterfaceCFL)
+  {
+    if (time_parameters.adaptation.reject_timestep_with_large_cfl)
+    {
+      const double cfl_ratio = max_interface_cfl_number /
+                               time_parameters.adaptation.target_interface_cfl;
+
+      if (cfl_ratio > time_parameters.adaptation.reject_cfl_factor)
+      {
+        if (mpi_rank == 0)
+          std::cout << "Rejecting time step because interface CFL ratio is "
+                       "too large : "
+                    << cfl_ratio << " > "
+                    << time_parameters.adaptation.reject_cfl_factor
+                    << std::endl;
+        goto reject_step;
+      }
+    }
+  }
+
 accept_step:
   // Accepting step : reset counter and update time step
   n_consecutive_rejected_steps = 0;
@@ -446,6 +479,11 @@ unsigned int TimeHandler::get_n_rejected_steps() const
 void TimeHandler::set_max_cfl(const double max_cfl)
 {
   max_cfl_number = max_cfl;
+}
+
+void TimeHandler::set_max_interface_cfl(const double max_interface_cfl)
+{
+  max_interface_cfl_number = max_interface_cfl;
 }
 
 double clamp_timestep(const double                       current_timestep,
@@ -527,6 +565,12 @@ void TimeHandler::set_next_timestep(const bool step_was_accepted)
       next_timestep =
         current_dt * time_parameters.adaptation.target_cfl / max_cfl_number;
     }
+    if (time_parameters.adaptation.strategy == Strategy::InterfaceCFL)
+    {
+      next_timestep = current_dt *
+                      time_parameters.adaptation.target_interface_cfl /
+                      max_interface_cfl_number;
+    }
 
     // Make sure the last time step is the prescribed end time
     // FIXME: adjust time step to match the end of the current subinterval
@@ -558,6 +602,13 @@ void TimeHandler::set_next_timestep(const bool step_was_accepted)
       // safety factor to avoid multiple rejections in a row.
       next_timestep = reduction_factor * current_dt *
                       time_parameters.adaptation.target_cfl / max_cfl_number;
+    }
+    else if (time_parameters.adaptation.strategy == Strategy::InterfaceCFL)
+    {
+      // Same as above, with the interface CFL number
+      next_timestep = reduction_factor * current_dt *
+                      time_parameters.adaptation.target_interface_cfl /
+                      max_interface_cfl_number;
     }
     else
     {

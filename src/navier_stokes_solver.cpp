@@ -1115,6 +1115,31 @@ void NavierStokesSolver<dim, with_moving_mesh>::compute_max_cfl()
                                            velocity_extractor);
     time_handler.set_max_cfl(cfl);
   }
+  else if (param.time_integration.adaptation.strategy ==
+           Parameters::TimeIntegration::Adaptation::AdaptationStrategy::
+             InterfaceCFL)
+  {
+    TimerOutput::Scope t(computing_timer, "Compute interface CFL");
+    const FEValuesExtractors::Vector velocity_extractor(ordering->u_lower);
+    const FEValuesExtractors::Scalar tracer_extractor(ordering->phi_lower);
+    const FEValuesExtractors::Vector position_extractor(ordering->x_lower);
+    const double interface_cfl = PostProcessingTools::compute_max_interface_cfl(
+      time_handler.current_dt,
+      *moving_mapping,
+      *dof_handler,
+      *quadrature,
+      *present_solution,
+      velocity_extractor,
+      tracer_extractor,
+      param.cahn_hilliard.epsilon_interface,
+      with_moving_mesh ? &position_extractor : nullptr,
+      time_handler.bdf_coefficients,
+      *previous_solutions);
+    time_handler.set_max_interface_cfl(interface_cfl);
+    if (param.time_integration.adaptation.verbosity ==
+        Parameters::Verbosity::verbose)
+      pcout << "Max interface CFL = " << interface_cfl << std::endl;
+  }
 }
 
 template <int dim, bool with_moving_mesh>

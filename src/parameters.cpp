@@ -1504,8 +1504,10 @@ namespace Parameters
                           "Enable adaptive time stepping");
         prm.declare_entry("adaptation strategy",
                           "bdf truncation error",
-                          Patterns::Selection("bdf truncation error|cfl"),
-                          "Strategy used to drive timestep adaptation");
+                          Patterns::Selection(
+                            "bdf truncation error|cfl|interface cfl"),
+                          "Strategy used to drive timestep adaptation. "
+                          "'interface cfl' is for CHNS solvers only.");
         // Set the maximum absolute time step to the arbitrary value of 100
         prm.declare_entry("max timestep",
                           "100.",
@@ -1572,6 +1574,16 @@ namespace Parameters
                           Patterns::Double(1.),
                           "Time step is rejected if its CFL number exceeds "
                           "this value times the target CFL");
+        prm.declare_entry(
+          "target interface cfl number",
+          "0.2",
+          Patterns::Double(0.),
+          "Target CHNS interface CFL number for the 'interface cfl' "
+          "strategy: dt * max |(u - w) . n| / epsilon, where n = grad(phi) / "
+          "|grad(phi)|, w is the mesh velocity and the maximum is taken "
+          "where |phi| < 0.99. It limits the normal motion of the diffuse "
+          "profile during one time step, independently of the mesh size. "
+          "Time steps are rejected as for the cfl strategy.");
       }
       prm.leave_subsection();
     }
@@ -1621,6 +1633,8 @@ namespace Parameters
             Adaptation::AdaptationStrategy::BDFTruncationError;
         else if (parsed_strategy == "cfl")
           adaptation.strategy = Adaptation::AdaptationStrategy::CFL;
+        else if (parsed_strategy == "interface cfl")
+          adaptation.strategy = Adaptation::AdaptationStrategy::InterfaceCFL;
         else
           throw std::runtime_error("Unknown timestep adaptation method : " +
                                    parsed_strategy);
@@ -1661,6 +1675,8 @@ namespace Parameters
         adaptation.reject_timestep_with_large_cfl =
           prm.get_bool("reject timestep with large cfl");
         adaptation.reject_cfl_factor = prm.get_double("cfl ratio to reject");
+        adaptation.target_interface_cfl =
+          prm.get_double("target interface cfl number");
       }
       prm.leave_subsection();
     }
