@@ -874,7 +874,7 @@ namespace Parameters
     double velocity_regularization;
     bool   mobility_tracer_limiter;
     std::shared_ptr<ManufacturedSolutions::ParsedFunctionSDBase<dim>>
-           degenerate_mobility;
+      degenerate_mobility;
     enum class SurfaceTensionRepresentation
     {
       korteweg,

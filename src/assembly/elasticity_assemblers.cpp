@@ -385,8 +385,8 @@ namespace Assembly
         const double transport = -param.cahn_hilliard.mff_transport_factor;
         for (unsigned int q = 0; q < sd.n_q_points; ++q)
         {
-          const double            phi      = sd.tracer_values[q];
-          const Tensor<1, dim>   &grad_phi = sd.tracer_gradients[q];
+          const double            phi        = sd.tracer_values[q];
+          const Tensor<1, dim>   &grad_phi   = sd.tracer_gradients[q];
           const MeshForcingFactor phi_factor = mesh_forcing_factor(phi, gamma);
 
           const Tensor<1, dim> convective_velocity =
@@ -531,8 +531,8 @@ namespace Assembly
         std::vector<Tensor<1, dim>> forcing_variations(sd.dofs_per_cell);
         for (unsigned int q = 0; q < sd.n_q_points; ++q)
         {
-          const double            phi      = sd.tracer_values[q];
-          const Tensor<1, dim>   &grad_phi = sd.tracer_gradients[q];
+          const double            phi        = sd.tracer_values[q];
+          const Tensor<1, dim>   &grad_phi   = sd.tracer_gradients[q];
           const MeshForcingFactor phi_factor = mesh_forcing_factor(phi, gamma);
 
           const Tensor<1, dim> convective_velocity =

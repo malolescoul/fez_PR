@@ -536,9 +536,9 @@ private:
     std::vector<std::pair<double, std::string>> &records,
     const std::string                           &filename) const;
 
-  void         process_surface_tension_force(const Tensor<1, dim> &force,
-                                             double                integral_magnitude,
-                                             const TimeHandler    &time);
+  void process_surface_tension_force(const Tensor<1, dim> &force,
+                                     double                integral_magnitude,
+                                     const TimeHandler    &time);
   const Parameters::CahnHilliard<dim> &cahn_hilliard_param;
   std::unique_ptr<CHNSSurfaceTension::WeakForceProjection<dim>> geometric_force;
   TableHandler surface_tension_force_table;
@@ -594,8 +594,8 @@ private:
   unsigned int chns_energy_last_iteration = numbers::invalid_unsigned_int;
   double       chns_energy_reference_time = 0., chns_energy_last_time = 0.;
   double       chns_initial_mass = 0., chns_initial_phase = 0.,
-               chns_initial_energy  = 0.;
-  double       chns_previous_energy = 0.;
+         chns_initial_energy                 = 0.;
+  double                chns_previous_energy = 0.;
   std::array<double, 3> chns_stabilization_work{};
 };
 

@@ -1,6 +1,5 @@
-#include <chns_energy.h>
-
 #include <assembly/incompressible_chns_assemblers.h>
+#include <chns_energy.h>
 #include <components_ordering.h>
 #include <copy_data.h>
 #include <parameter_reader.h>
@@ -74,7 +73,7 @@ namespace Assembly
         const auto &p        = sd.present_pressure_values[q];
         const auto &source_p = sd.source_term_pressure[q];
 
-        const auto phase_flux = sd.get_phase_flux(q);
+        const auto  phase_flux     = sd.get_phase_flux(q);
         const auto &diffusive_flux = sd.diffusive_flux[q];
         const auto &dphidt         = sd.tracer_time_derivatives[q];
         const auto &phi            = sd.tracer_values[q];
@@ -86,8 +85,7 @@ namespace Assembly
 
         auto supg_velocity = u_conv;
         if constexpr (BaseType::with_stabilization)
-          supg_velocity +=
-            (sd.diffusive_flux_factor / rho) * phase_flux;
+          supg_velocity += (sd.diffusive_flux_factor / rho) * phase_flux;
 
         const auto to_mult_by_phi_u_i =
           rho * (dudt + grad_u * u_conv - body_force) + diffusive_flux +
@@ -111,8 +109,8 @@ namespace Assembly
         double inv_rho = 0.;
         if constexpr (BaseType::with_stabilization)
         {
-          tau                   = sd.tau_supg_velocity[q];
-          inv_rho               = 1. / rho;
+          tau     = sd.tau_supg_velocity[q];
+          inv_rho = 1. / rho;
 
           // Compute strong residual of the momentum equation, in force units
           // (i.e. multiplied by the density). The SUPG and PSPG test operators
@@ -123,7 +121,7 @@ namespace Assembly
 
         if constexpr (BaseType::with_tracer_stabilization)
         {
-          tau_tracer          = sd.tau_supg_tracer[q];
+          tau_tracer = sd.tau_supg_tracer[q];
 
           // Compute strong residual of the tracer equation
           strong_residual_tracer = CHNSEnergy::phase_residual<dim>(sd, q);
@@ -169,8 +167,8 @@ namespace Assembly
           // Tracer equation
           else if (i_is_phi)
           {
-            local_rhs_i -= phi_phi[i] * to_mult_by_phi_phi_i +
-                           grad_phi_phi[i] * phase_flux;
+            local_rhs_i -=
+              phi_phi[i] * to_mult_by_phi_phi_i + grad_phi_phi[i] * phase_flux;
 
             if constexpr (BaseType::with_tracer_stabilization)
               // Tracer SUPG stabilization
@@ -309,23 +307,22 @@ namespace Assembly
         }
         const auto u_dot_grad_u_ale = grad_u * u_conv;
 
-        const auto  &p        = sd.present_pressure_values[q];
+        const auto                  &p      = sd.present_pressure_values[q];
         [[maybe_unused]] const auto &grad_p = sd.present_pressure_gradients[q];
-        const double source_p = sd.source_term_pressure[q];
+        const double                 source_p = sd.source_term_pressure[q];
 
-        const auto phase_flux = sd.get_phase_flux(q);
-        const auto  &dphidt         = sd.tracer_time_derivatives[q];
-        const auto  &phi            = sd.tracer_values[q];
-        const auto  &grad_phi       = sd.tracer_gradients[q];
-        const auto  &mu             = sd.potential_values[q];
-        const auto  &grad_mu        = sd.potential_gradients[q];
-        const double source_phi     = sd.source_term_tracer[q];
-        const double source_mu      = sd.source_term_potential[q];
+        const auto   phase_flux = sd.get_phase_flux(q);
+        const auto  &dphidt     = sd.tracer_time_derivatives[q];
+        const auto  &phi        = sd.tracer_values[q];
+        const auto  &grad_phi   = sd.tracer_gradients[q];
+        const auto  &mu         = sd.potential_values[q];
+        const auto  &grad_mu    = sd.potential_gradients[q];
+        const double source_phi = sd.source_term_tracer[q];
+        const double source_mu  = sd.source_term_potential[q];
 
         auto supg_velocity = u_conv;
         if constexpr (BaseType::with_stabilization)
-          supg_velocity +=
-            (sd.diffusive_flux_factor / rho) * phase_flux;
+          supg_velocity += (sd.diffusive_flux_factor / rho) * phase_flux;
 
         const auto &phi_u            = sd.phi_u[q];
         const auto &grad_phi_u       = sd.grad_phi_u[q];
@@ -390,7 +387,7 @@ namespace Assembly
 
         if constexpr (BaseType::with_tracer_stabilization)
         {
-          tau_tracer          = sd.tau_supg_tracer[q];
+          tau_tracer = sd.tau_supg_tracer[q];
 
           // Compute strong residual of the tracer equation
           strong_residual_tracer = CHNSEnergy::phase_residual<dim>(sd, q);
@@ -535,7 +532,7 @@ namespace Assembly
             const auto   transpose_G = transpose(G);
             const double trG         = trace(G);
 
-            const auto grad_u_x_G_j = grad_u * G;
+            const auto   grad_u_x_G_j = grad_u * G;
             const auto   dgrad_phi_x  = -(transpose_G * grad_phi);
             const double dM_x =
               sd.variable_mobility ?
@@ -548,15 +545,15 @@ namespace Assembly
                  (sd.gradient_dependent_mobility ||
                   !sd.profile_correction_flux.empty())) ||
                 (sd.laplace_beltrami && BaseType::with_stabilization))
-              {
-                const auto &H = sd.tracer_hessians[q];
-                const auto &K = (*hessian_phi_x_moving)[j];
-                dhess_phi_x   = -(transpose_G * H + H * G);
-                for (unsigned int a = 0; a < dim; ++a)
-                  for (unsigned int b = 0; b < dim; ++b)
-                    for (unsigned int c = 0; c < dim; ++c)
-                      dhess_phi_x[a][b] -= grad_phi[c] * K[c][a][b];
-              }
+            {
+              const auto &H = sd.tracer_hessians[q];
+              const auto &K = (*hessian_phi_x_moving)[j];
+              dhess_phi_x   = -(transpose_G * H + H * G);
+              for (unsigned int a = 0; a < dim; ++a)
+                for (unsigned int b = 0; b < dim; ++b)
+                  for (unsigned int c = 0; c < dim; ++c)
+                    dhess_phi_x[a][b] -= grad_phi[c] * K[c][a][b];
+            }
             CahnHilliard::ProfileCorrection<dim> dcorrection_x;
             if (!sd.profile_correction_flux.empty())
             {
@@ -848,10 +845,10 @@ namespace Assembly
               {
                 // SUPG stabilization : variation w.r.t. u, p, phi and mu
                 local_matrix_ij +=
-                  tau * (strong_residual_momentum_variation[j] *
-                           supg_velocity_dot_grad_phi_u_i +
-                         residual_dot_grad_phi_u_i *
-                           supg_velocity_variation[j]);
+                  tau *
+                  (strong_residual_momentum_variation[j] *
+                     supg_velocity_dot_grad_phi_u_i +
+                   residual_dot_grad_phi_u_i * supg_velocity_variation[j]);
               }
 
               if constexpr (BaseType::with_moving_mesh)

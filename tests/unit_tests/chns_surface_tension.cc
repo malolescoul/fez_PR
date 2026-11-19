@@ -141,9 +141,9 @@ void check_force()
   param.postprocessing.chns_energy.verbosity = Parameters::Verbosity::quiet;
   param.output.read_parameters(prm);
   param.time_integration.read_parameters(prm);
-  param.time_integration.scheme = Parameters::TimeIntegration::Scheme::BDF1;
+  param.time_integration.scheme    = Parameters::TimeIntegration::Scheme::BDF1;
   param.time_integration.t_initial = 0.;
-  param.time_integration.t_end = 1.;
+  param.time_integration.t_end     = 1.;
   param.time_integration.n_time_intervals          = 1;
   param.time_integration.n_steady_adaptation_steps = 0;
   param.finite_elements.mapping_degree             = 1;

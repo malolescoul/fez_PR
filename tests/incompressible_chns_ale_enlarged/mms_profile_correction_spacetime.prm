@@ -90,8 +90,9 @@ subsection Physical properties
 end
 
 subsection Cahn Hilliard
-  set psi interface width factor  = 1.5
-  set psi mu correction factor    = 0.3
+  set psi interface width factor = 1.5
+  set psi mu correction factor   = 0.3
+
   subsection profile correction
     set enable profile correction   = true
     set profile correction strength = 0.6

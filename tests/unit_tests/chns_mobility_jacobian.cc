@@ -1,5 +1,5 @@
-#include <assembly/incompressible_chns_assemblers.h>
 #include <assembly/elasticity_assemblers.h>
+#include <assembly/incompressible_chns_assemblers.h>
 #include <deal.II/grid/grid_generator.h>
 #include <deal.II/grid/tria_description.h>
 #include <deal.II/numerics/vector_tools.h>
@@ -159,9 +159,9 @@ namespace
         if (this->param.cahn_hilliard.enable_profile_correction)
           Assembly::Elasticity::setup_assemblers<2, Scratch, CopyDataBase<>>(
             this->param, *this->ordering, assemblers);
-      auto       &scratch = *this->scratch_data;
-      const auto  cell    = this->dof_handler->begin_active();
-      auto        reinit  = [&]() {
+      auto      &scratch = *this->scratch_data;
+      const auto cell    = this->dof_handler->begin_active();
+      auto       reinit  = [&]() {
         scratch.reinit(cell,
                        this->evaluation_point,
                        *this->previous_solutions,
@@ -430,8 +430,8 @@ end
     prm.parse_input(parameters);
     param.read(prm);
     param.cahn_hilliard.enable_profile_correction = profile_correction;
-    param.bc_data.fix_pressure_constant      = false;
-    param.bc_data.enforce_zero_mean_pressure = false;
+    param.bc_data.fix_pressure_constant           = false;
+    param.bc_data.enforce_zero_mean_pressure      = false;
     const std::string label = mobility_model + (enlarged ? "/enlarged" : "") +
                               (moving ? "/ALE" : "/fixed") +
                               (momentum_supg ? "/momentum-SUPG" : "") +

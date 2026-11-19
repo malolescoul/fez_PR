@@ -173,7 +173,7 @@ public:
 template <int dim, bool enlarged = false>
 void check_initial_state()
 {
-  auto                     param = presolver_test_parameters<dim>();
+  auto param = presolver_test_parameters<dim>();
   if constexpr (enlarged)
   {
     param.cahn_hilliard.mff_enlarged_compression_factor     = 0.5;

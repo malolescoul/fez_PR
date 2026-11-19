@@ -208,7 +208,9 @@ namespace NavierStokesScratch
 
     /** Values on the cell most recently passed to reinit(). */
     const FEValues<dim> &get_current_fe_values() const
-    { return *active_fe_values; }
+    {
+      return *active_fe_values;
+    }
 
     /**
      * Control whether the stabilization parameters stay constant during reinit.
@@ -1265,8 +1267,8 @@ namespace NavierStokesScratch
                enable_tracer_stabilization) ||
               (laplace_beltrami && enable_stabilization))
             hessian_shape_phi[q][k] = fe_values_moving[tracer].hessian(k, q);
-          shape_mu[q][k]       = fe_values_moving[potential].value(k, q);
-          grad_shape_mu[q][k]  = fe_values_moving[potential].gradient(k, q);
+          shape_mu[q][k]      = fe_values_moving[potential].value(k, q);
+          grad_shape_mu[q][k] = fe_values_moving[potential].gradient(k, q);
           if constexpr (enable_enlarged)
           {
             shape_psi[q][k]      = fe_values_moving[psi].value(k, q);
@@ -1711,11 +1713,11 @@ namespace NavierStokesScratch
     FEValuesExtractors::Scalar potential;
     FEValuesExtractors::Scalar psi;
 
-    double         density0;
-    double         density1;
-    double         dynamic_viscosity0;
-    double         dynamic_viscosity1;
-    double         mobility;
+    double                                        density0;
+    double                                        density1;
+    double                                        dynamic_viscosity0;
+    double                                        dynamic_viscosity1;
+    double                                        mobility;
     bool                                          variable_mobility;
     bool                                          adaptive_mobility;
     bool                                          gradient_dependent_mobility;
@@ -1726,13 +1728,13 @@ namespace NavierStokesScratch
     std::vector<Tensor<1, dim>>                              mobility_gradient;
     std::vector<Tensor<2, dim>>                              tracer_hessians;
     std::vector<std::vector<Tensor<2, dim>>>                 hessian_shape_phi;
-    double         epsilon;
-    double         sigma_tilde;
-    std::vector<std::vector<Tensor<1, dim>>> face_tracer_gradients;
+    double                                                   epsilon;
+    double                                                   sigma_tilde;
+    std::vector<std::vector<Tensor<1, dim>>>              face_tracer_gradients;
     std::vector<std::vector<std::vector<Tensor<1, dim>>>> grad_shape_phi_face;
-    double         surface_tension  = 0.;
-    bool           laplace_beltrami = false;
-    double         diffusive_flux_factor;
+    double                                                surface_tension = 0.;
+    bool   laplace_beltrami = false;
+    double diffusive_flux_factor;
     // Enlarged (psi) Helmholtz length scale squared (L^2, L = width factor *
     // epsilon) and the raw mu-correction factor. Only set when enlarged.
     double         psi_length_scale_sq;

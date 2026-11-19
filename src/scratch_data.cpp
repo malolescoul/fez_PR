@@ -413,17 +413,17 @@ namespace NavierStokesScratch
     const auto &pp = param.physical_properties;
     const auto &ch = param.cahn_hilliard;
 
-    density0              = pp.fluids[0].density;
-    density1              = pp.fluids[1].density;
-    const double nu0      = pp.fluids[0].kinematic_viscosity;
-    const double nu1      = pp.fluids[1].kinematic_viscosity;
-    dynamic_viscosity0    = density0 * nu0;
-    dynamic_viscosity1    = density1 * nu1;
-    mobility              = ch.mobility;
-    epsilon               = ch.epsilon_interface;
-    sigma_tilde           = 3. / (2. * sqrt(2.)) * ch.surface_tension;
-    surface_tension       = ch.surface_tension;
-    laplace_beltrami      = ch.surface_tension_representation ==
+    density0           = pp.fluids[0].density;
+    density1           = pp.fluids[1].density;
+    const double nu0   = pp.fluids[0].kinematic_viscosity;
+    const double nu1   = pp.fluids[1].kinematic_viscosity;
+    dynamic_viscosity0 = density0 * nu0;
+    dynamic_viscosity1 = density1 * nu1;
+    mobility           = ch.mobility;
+    epsilon            = ch.epsilon_interface;
+    sigma_tilde        = 3. / (2. * sqrt(2.)) * ch.surface_tension;
+    surface_tension    = ch.surface_tension;
+    laplace_beltrami   = ch.surface_tension_representation ==
                        Parameters::CahnHilliard<
                          dim>::SurfaceTensionRepresentation::laplace_beltrami;
     diffusive_flux_factor = 0.5 * (density1 - density0);
@@ -432,10 +432,10 @@ namespace NavierStokesScratch
     adaptive_mobility   = CahnHilliard::is_adaptive_mobility_model(ch);
     gradient_dependent_mobility =
       ch.mobility_model == MobilityModel::adaptive_normal_velocity;
-    mobility_scaling      = CahnHilliard::get_adaptive_mobility_scaling(ch);
-    mobility_function     = CahnHilliard::get_mobility_evaluation_function(ch);
-    body_force            = pp.body_force;
-    tracer_limiter        = CahnHilliard::get_limiter_function(ch);
+    mobility_scaling  = CahnHilliard::get_adaptive_mobility_scaling(ch);
+    mobility_function = CahnHilliard::get_mobility_evaluation_function(ch);
+    body_force        = pp.body_force;
+    tracer_limiter    = CahnHilliard::get_limiter_function(ch);
     if constexpr (enable_enlarged)
     {
       const double length      = ch.psi_interface_width_factor * epsilon;

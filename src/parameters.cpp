@@ -1914,8 +1914,8 @@ namespace Parameters
         mff_source_term = MeshForcingSourceTerm::off;
       mff_physics_compression_factor =
         prm.get_double("mff physics compression factor");
-      mff_transport_factor     = prm.get_double("mff transport factor");
-      mff_regularization_gamma = prm.get_double("mff regularization gamma");
+      mff_transport_factor       = prm.get_double("mff transport factor");
+      mff_regularization_gamma   = prm.get_double("mff regularization gamma");
       psi_interface_width_factor = prm.get_double("psi interface width factor");
       psi_mu_correction_factor   = prm.get_double("psi mu correction factor");
       mff_enlarged_compression_factor =

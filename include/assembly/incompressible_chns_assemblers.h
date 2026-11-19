@@ -1,10 +1,9 @@
 #ifndef INCOMPRESSIBLE_CHNS_ASSEMBLERS_H
 #define INCOMPRESSIBLE_CHNS_ASSEMBLERS_H
 
-#include <chns_surface_tension.h>
-
 #include <assembly/assembler.h>
 #include <boundary_conditions.h>
+#include <chns_surface_tension.h>
 #include <components_ordering.h>
 #include <deal.II/base/table.h>
 #include <deal.II/base/tensor.h>
@@ -469,7 +468,6 @@ namespace Assembly
         assemblers.emplace_back(
           std::make_unique<
             CapillaryBoundaryAssembler<dim, ScratchData, CopyData>>());
-
     }
   } // namespace IncompressibleCHNS
 } // namespace Assembly

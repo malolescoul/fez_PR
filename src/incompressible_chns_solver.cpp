@@ -84,8 +84,7 @@ bool CHNSSolver<dim, with_moving_mesh, with_enlarged>::
       this->pcout << "\nCHNS-ALE" << (with_enlarged ? " enlarged" : "")
                   << std::endl;
       if (this->param.mesh.verbosity == Parameters::Verbosity::verbose)
-        this->pcout << "Mesh info:\n dimension: " << dim
-                    << "\n no. of cells: "
+        this->pcout << "Mesh info:\n dimension: " << dim << "\n no. of cells: "
                     << this->triangulation->n_global_active_cells()
                     << std::endl;
       this->pcout << "Number of degrees of freedom: "
@@ -277,13 +276,13 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::MMSSourceTerm::
   }
 
   // Use convention (grad_u)_ij := dvj/dxi
-  Tensor<2, dim> grad_u      = mms.exact_velocity->gradient_vj_xi(p);
-  Tensor<1, dim> lap_u       = mms.exact_velocity->vector_laplacian(p);
-  Tensor<1, dim> grad_div_u  = mms.exact_velocity->grad_div(p);
-  Tensor<1, dim> grad_p      = mms.exact_pressure->gradient(p);
-  Tensor<1, dim> uDotGradu   = u * grad_u;
-  Tensor<1, dim> grad_mu     = mms.exact_potential->gradient(p);
-  Tensor<1, dim> grad_phi    = mms.exact_tracer->gradient(p);
+  Tensor<2, dim> grad_u     = mms.exact_velocity->gradient_vj_xi(p);
+  Tensor<1, dim> lap_u      = mms.exact_velocity->vector_laplacian(p);
+  Tensor<1, dim> grad_div_u = mms.exact_velocity->grad_div(p);
+  Tensor<1, dim> grad_p     = mms.exact_pressure->gradient(p);
+  Tensor<1, dim> uDotGradu  = u * grad_u;
+  Tensor<1, dim> grad_mu    = mms.exact_potential->gradient(p);
+  Tensor<1, dim> grad_phi   = mms.exact_tracer->gradient(p);
   const auto     evaluate_mobility =
     CahnHilliard::get_mobility_evaluation_function(cahn_hilliard_param);
   const auto mobility_data =
@@ -950,7 +949,7 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::
     diagnostics.profile_correction_coefficient =
       compute_profile_correction_coefficient(false, true);
     CHNSEnergy::Integrals local, global;
-    const bool transient = !this->time_handler.is_steady() &&
+    const bool            transient = !this->time_handler.is_steady() &&
                            this->time_handler.current_time_iteration > 0 &&
                            this->time_handler.current_time_iteration !=
                              this->time_handler.time_iteration_at_last_restart;
