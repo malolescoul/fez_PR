@@ -1786,6 +1786,14 @@ namespace Parameters
                           Patterns::Double(0.),
                           "Multiplier of 2*M_max*sigma_tilde/epsilon in the "
                           "profile correction flux.");
+        prm.declare_entry(
+          "frozen normal",
+          "false",
+          Patterns::Bool(),
+          "Take the direction of the profile correction flux from the phase "
+          "gradient of the previous time step. The flux is then a diffusion "
+          "along that normal plus a compression, without the tangential "
+          "anti-diffusion of the implicit normal. Requires a fixed mesh.");
         prm.enter_subsection("interaction cutoff");
         {
           prm.declare_entry(
@@ -1955,6 +1963,7 @@ namespace Parameters
         enable_profile_correction = prm.get_bool("enable profile correction");
         profile_correction_strength =
           prm.get_double("profile correction strength");
+        profile_correction_frozen_normal = prm.get_bool("frozen normal");
         prm.enter_subsection("interaction cutoff");
         {
           enable_profile_correction_cutoff = prm.get_bool("enable");

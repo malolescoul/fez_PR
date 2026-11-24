@@ -887,6 +887,8 @@ namespace Parameters
     bool   with_tracer_limiter;
     bool   enable_profile_correction   = false;
     double profile_correction_strength = 0.6;
+    // Direction of the correction flux from the previous time step.
+    bool profile_correction_frozen_normal = false;
     // Switch the correction off where interfaces interact (filaments, notches,
     // folds below epsilon).
     bool enable_profile_correction_cutoff = false;

@@ -399,14 +399,29 @@ namespace Assembly
 
         CahnHilliard::ProfileCorrectionLinearization<dim> correction;
         if (!sd.profile_correction_flux.empty())
-          CahnHilliard::evaluate_profile_correction(
-            phi,
-            grad_phi,
-            BaseType::with_tracer_stabilization ? sd.tracer_hessians[q] :
-                                                  Tensor<2, dim>(),
-            sd.epsilon,
-            BaseType::with_tracer_stabilization,
-            &correction);
+        {
+          const Tensor<2, dim> hessian = BaseType::with_tracer_stabilization ?
+                                           sd.tracer_hessians[q] :
+                                           Tensor<2, dim>();
+          if (sd.profile_correction_normal.empty())
+            CahnHilliard::evaluate_profile_correction(
+              phi,
+              grad_phi,
+              hessian,
+              sd.epsilon,
+              BaseType::with_tracer_stabilization,
+              &correction);
+          else
+            // The normal is frozen: only phi and its derivatives vary.
+            CahnHilliard::evaluate_frozen_normal_correction(
+              phi,
+              grad_phi,
+              hessian,
+              sd.epsilon,
+              sd.profile_correction_normal[q],
+              BaseType::with_tracer_stabilization,
+              &correction);
+        }
 
         // Precompute quantities depending only on j
         for (unsigned int j = 0; j < sd.dofs_per_cell; ++j)

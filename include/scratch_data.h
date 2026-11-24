@@ -1151,14 +1151,47 @@ namespace NavierStokesScratch
         const bool with_cutoff =
           profile_correction_cutoff &&
           profile_correction_cutoff->is_ready(n_q_points);
+        const bool frozen_normal =
+          param.cahn_hilliard.profile_correction_frozen_normal;
+        if (frozen_normal)
+        {
+          Assert(!previous_solutions.empty(), ExcInternalError());
+          // Last accepted state, unchanged by the Newton iterations.
+          fe_values_moving[tracer].get_function_gradients(
+            previous_solutions[0], previous_tracer_gradients);
+          if (enable_tracer_stabilization)
+            fe_values_moving[tracer].get_function_hessians(
+              previous_solutions[0], previous_tracer_hessians);
+        }
         for (unsigned int q = 0; q < n_q_points; ++q)
         {
-          const auto correction = CahnHilliard::evaluate_profile_correction(
-            tracer_values[q],
-            tracer_gradients[q],
-            enable_tracer_stabilization ? tracer_hessians[q] : Tensor<2, dim>(),
-            epsilon,
-            enable_tracer_stabilization);
+          const Tensor<2, dim> hessian =
+            enable_tracer_stabilization ? tracer_hessians[q] : Tensor<2, dim>();
+          CahnHilliard::ProfileCorrection<dim> correction;
+          if (frozen_normal)
+          {
+            profile_correction_normal[q] =
+              CahnHilliard::frozen_normal(previous_tracer_gradients[q],
+                                          enable_tracer_stabilization ?
+                                            previous_tracer_hessians[q] :
+                                            Tensor<2, dim>(),
+                                          epsilon,
+                                          enable_tracer_stabilization);
+            correction = CahnHilliard::evaluate_frozen_normal_correction(
+              tracer_values[q],
+              tracer_gradients[q],
+              hessian,
+              epsilon,
+              profile_correction_normal[q],
+              enable_tracer_stabilization);
+          }
+          else
+            correction = CahnHilliard::evaluate_profile_correction(
+              tracer_values[q],
+              tracer_gradients[q],
+              hessian,
+              epsilon,
+              enable_tracer_stabilization);
           profile_correction_weight[q] =
             with_cutoff ?
               profile_correction_cutoff->weight(active_cell_index, q) :
@@ -1793,6 +1826,10 @@ namespace NavierStokesScratch
                                *profile_correction_cutoff = nullptr;
     std::vector<double>         profile_correction_weight;
     std::vector<Tensor<1, dim>> profile_correction_weight_gradient;
+    // Normal of the correction flux from the previous time step, when frozen.
+    std::vector<CahnHilliard::FrozenNormal<dim>> profile_correction_normal;
+    std::vector<Tensor<1, dim>>                  previous_tracer_gradients;
+    std::vector<Tensor<2, dim>>                  previous_tracer_hessians;
 
     std::vector<Tensor<1, dim>> diffusive_flux;
     std::vector<double>         tau_supg_tracer;

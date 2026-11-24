@@ -79,14 +79,17 @@ namespace CahnHilliard
    * (1 - Q/R) grad(phi) = gain * eta * grad(phi) for |grad(phi)| = q (1 + eta).
    * The correction of coefficient K restores the isoline phi at the rate
    * 2 K gain(phi) / eps^2, which is the normal strain it can hold there.
+   * With the frozen normal, the gain is the weight q^2/(q^2+delta^2) of the
+   * normal: beta does not enter.
    */
-  inline double profile_correction_gain(const double phi, const double epsilon)
+  inline double profile_correction_gain(const double phi,
+                                        const double epsilon,
+                                        const bool   frozen_normal = false)
   {
     const double q     = (1. - phi * phi) / (std::sqrt(2.) * epsilon);
     const double delta = profile_correction_gradient_floor(epsilon);
-    return q * q /
-           ((1. + profile_correction_beta * profile_correction_beta) * q * q +
-            delta * delta);
+    const double beta  = frozen_normal ? 0. : profile_correction_beta;
+    return q * q / ((1. + beta * beta) * q * q + delta * delta);
   }
 
   /**
@@ -171,6 +174,108 @@ namespace CahnHilliard
            4. * f_ss * gHg) *
             gradient +
           4. * f_s * Hg;
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Normal of the profile flux taken from the previous time step: direction
+   * e = g/|g| of the phase gradient g there, weight w = |g|^2/(|g|^2+delta^2)
+   * and their gradients from the Hessian of the same state. The weight
+   * switches the flux off where the gradient falls below the floor delta.
+   */
+  template <int dim>
+  struct FrozenNormal
+  {
+    dealii::Tensor<1, dim> direction;
+    double                 weight = 0.;
+    // direction_gradient[i][j] = d e_i / d x_j.
+    dealii::Tensor<2, dim> direction_gradient;
+    dealii::Tensor<1, dim> weight_gradient;
+  };
+
+  template <int dim>
+  FrozenNormal<dim> frozen_normal(const dealii::Tensor<1, dim> &gradient,
+                                  const dealii::Tensor<2, dim> &hessian,
+                                  const double                  epsilon,
+                                  const bool with_gradients = true)
+  {
+    FrozenNormal<dim> result;
+    const double      s2 = gradient.norm_square();
+    if (s2 == 0.)
+      return result;
+    const double delta2 =
+      std::pow(profile_correction_gradient_floor(epsilon), 2);
+    const double s   = std::sqrt(s2);
+    result.direction = gradient / s;
+    result.weight    = s2 / (s2 + delta2);
+    if (with_gradients)
+    {
+      // grad(e) = (I - e e) H / |g| and grad(w) = 2 delta^2 H g / (|g|^2 +
+      // delta^2)^2.
+      dealii::Tensor<2, dim> projector = dealii::unit_symmetric_tensor<dim>();
+      projector -= dealii::outer_product(result.direction, result.direction);
+      result.direction_gradient = projector * hessian / s;
+      result.weight_gradient =
+        2. * delta2 / ((s2 + delta2) * (s2 + delta2)) * (hessian * gradient);
+    }
+    return result;
+  }
+
+  /**
+   * Profile flux with the frozen normal of the previous step:
+   * F = w (grad(phi).e - q(phi)) e, with q = (1-phi^2)/(sqrt(2)*epsilon).
+   * It vanishes on the tanh profile along e, like the flux above. As e no
+   * longer depends on the unknown, F is a diffusion along e only (tensor
+   * w e e, never negative) plus a compression q(phi) e. The flux above has the
+   * tangential diffusion (1-Q/R) instead, negative wherever |grad(phi)| < q:
+   * anti-diffusive along a stretched interface or a filament core, where it
+   * makes the implicit step ill-conditioned. q is continued smoothly beyond
+   * |phi|=1, where the compression pushes overshoots back to the interface,
+   * so that F is smooth in phi.
+   */
+  template <int dim>
+  ProfileCorrection<dim> evaluate_frozen_normal_correction(
+    const double                         phi,
+    const dealii::Tensor<1, dim>        &gradient,
+    const dealii::Tensor<2, dim>        &hessian,
+    const double                         epsilon,
+    const FrozenNormal<dim>             &normal,
+    const bool                           compute_divergence = true,
+    ProfileCorrectionLinearization<dim> *linearization      = nullptr)
+  {
+    if (linearization)
+      *linearization = {};
+    const double c    = 1. / (std::sqrt(2.) * epsilon);
+    const double q    = c * (1. - phi * phi);
+    const double dq   = -2. * c * phi;
+    const double ddq  = -2. * c;
+    const auto  &e    = normal.direction;
+    const double w    = normal.weight;
+    const double ge   = gradient * e;
+    const double gap  = ge - q;
+    const double tr_e = trace(normal.direction_gradient);
+    const auto   de_e = normal.direction_gradient * e;
+    const double dw_e = normal.weight_gradient * e;
+
+    ProfileCorrection<dim> result;
+    result.flux = w * gap * e;
+    // div(F) = gap grad(w).e + w (e.H.e + g.grad(e).e - q' g.e) + w gap div(e).
+    if (compute_divergence)
+      result.divergence = gap * dw_e +
+                          w * (e * (hessian * e) + gradient * de_e - dq * ge) +
+                          w * gap * tr_e;
+    if (linearization)
+    {
+      linearization->flux_phi      = -w * dq * e;
+      linearization->flux_gradient = w * dealii::outer_product(e, e);
+      if (compute_divergence)
+      {
+        linearization->divergence_phi =
+          -dq * dw_e - w * ddq * ge - w * dq * tr_e;
+        linearization->divergence_gradient =
+          (dw_e - w * dq + w * tr_e) * e + w * de_e;
       }
     }
     return result;

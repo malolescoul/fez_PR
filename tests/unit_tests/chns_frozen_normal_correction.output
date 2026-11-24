@@ -1,0 +1,7 @@
+DEAL::2D divergence against spatial differences: OK
+DEAL::3D divergence against spatial differences: OK
+DEAL::2D linearization against finite differences: OK
+DEAL::3D linearization against finite differences: OK
+DEAL::2D equilibrium, gain and flat phase: OK
+DEAL::3D equilibrium, gain and flat phase: OK
+DEAL::filament core, phi = 0.88, |grad phi| = 0.01 q: tangential / normal diffusion, implicit normal -18.635 / -17.880, frozen normal 0.000 / 0.996

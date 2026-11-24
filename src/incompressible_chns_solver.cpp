@@ -126,6 +126,18 @@ CHNSSolver<dim, with_moving_mesh, with_enlarged>::CHNSSolver(
                 ExcMessage("The manufactured source does not include the "
                            "interaction cutoff."));
   }
+  if (param.cahn_hilliard.profile_correction_frozen_normal)
+  {
+    AssertThrow(param.cahn_hilliard.enable_profile_correction,
+                ExcMessage("The frozen normal requires the profile "
+                           "correction."));
+    AssertThrow(!with_moving_mesh,
+                ExcMessage("The frozen normal is not available on moving "
+                           "meshes yet."));
+    AssertThrow(!param.mms_param.enable,
+                ExcMessage("The manufactured source does not include the "
+                           "frozen normal."));
+  }
   if (param.cahn_hilliard.enable_profile_correction_strain_scaling)
   {
     AssertThrow(param.cahn_hilliard.enable_profile_correction,
@@ -497,7 +509,9 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::prepare_timestep()
     const double reference =
       2. * compute_profile_correction_coefficient(false, true) *
       CahnHilliard::profile_correction_gain(
-        ch.profile_correction_strain_target_iso, epsilon) /
+        ch.profile_correction_strain_target_iso,
+        epsilon,
+        ch.profile_correction_frozen_normal) /
       (epsilon * epsilon);
     if (!profile_correction_cutoff ||
         &profile_correction_cutoff->get_triangulation() != this->triangulation)

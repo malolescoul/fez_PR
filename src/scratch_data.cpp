@@ -691,6 +691,13 @@ namespace NavierStokesScratch
         profile_correction_flux.resize(n_q_points);
         profile_correction_weight.resize(n_q_points, 1.);
         profile_correction_weight_gradient.resize(n_q_points);
+        if (param.cahn_hilliard.profile_correction_frozen_normal)
+        {
+          profile_correction_normal.resize(n_q_points);
+          previous_tracer_gradients.resize(n_q_points);
+          if (enable_tracer_stabilization)
+            previous_tracer_hessians.resize(n_q_points);
+        }
         if (enable_tracer_stabilization)
           profile_correction_divergence.resize(n_q_points);
       }
