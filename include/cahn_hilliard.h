@@ -71,6 +71,24 @@ namespace CahnHilliard
     return 1e-4 / epsilon;
   }
 
+  // Regularization of the denominator of the profile flux below.
+  constexpr double profile_correction_beta = 0.05;
+
+  /**
+   * Linear gain q^2/Q^2 of the profile flux at the equilibrium profile:
+   * (1 - Q/R) grad(phi) = gain * eta * grad(phi) for |grad(phi)| = q (1 + eta).
+   * The correction of coefficient K restores the isoline phi at the rate
+   * 2 K gain(phi) / eps^2, which is the normal strain it can hold there.
+   */
+  inline double profile_correction_gain(const double phi, const double epsilon)
+  {
+    const double q     = (1. - phi * phi) / (std::sqrt(2.) * epsilon);
+    const double delta = profile_correction_gradient_floor(epsilon);
+    return q * q /
+           ((1. + profile_correction_beta * profile_correction_beta) * q * q +
+            delta * delta);
+  }
+
   /**
    * Regularized profile flux F = (1-Q/R)*grad(phi), where
    * q=(1-phi^2)/(sqrt(2)*epsilon), R^2=|grad(phi)|^2+beta^2*q^2+delta^2 and
@@ -96,7 +114,7 @@ namespace CahnHilliard
   {
     if (linearization)
       *linearization = {};
-    constexpr double beta     = 0.05;
+    constexpr double beta     = profile_correction_beta;
     constexpr double c2       = 1. + beta * beta;
     const double     delta    = profile_correction_gradient_floor(epsilon);
     const bool       interior = phi * phi < 1.;

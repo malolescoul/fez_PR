@@ -433,8 +433,14 @@ namespace Assembly
                                    BaseType::with_tracer_stabilization ?
                                      sd.hessian_shape_phi[q][j] :
                                      Tensor<2, dim>());
-            dcorrection.flux *= sd.profile_correction_coefficient;
-            dcorrection.divergence *= sd.profile_correction_coefficient;
+            // The cutoff weight is frozen: it scales the flux variation, and
+            // its gradient enters the divergence variation.
+            dcorrection.divergence =
+              sd.profile_correction_coefficient *
+              (sd.profile_correction_weight[q] * dcorrection.divergence +
+               sd.profile_correction_weight_gradient[q] * dcorrection.flux);
+            dcorrection.flux *= sd.profile_correction_coefficient *
+                                sd.profile_correction_weight[q];
             correction_flux_variation[j] = dcorrection.flux;
           }
           if (additional_flux)
@@ -559,6 +565,7 @@ namespace Assembly
             {
               dcorrection_x =
                 correction.variation(0., dgrad_phi_x, dhess_phi_x);
+              // The cutoff is not available on moving meshes: weight 1.
               dcorrection_x.flux *= sd.profile_correction_coefficient;
               dcorrection_x.divergence *= sd.profile_correction_coefficient;
             }

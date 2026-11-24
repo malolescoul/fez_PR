@@ -2,6 +2,7 @@
 #define SCRATCH_DATA_H
 
 #include <cahn_hilliard.h>
+#include <chns_profile_correction_cutoff.h>
 #include <components_ordering.h>
 #include <deal.II/base/quadrature.h>
 #include <deal.II/fe/fe_simplex_p.h>
@@ -1146,6 +1147,10 @@ namespace NavierStokesScratch
                                                      previous_tracer_values[i]);
 
       if (param.cahn_hilliard.enable_profile_correction)
+      {
+        const bool with_cutoff =
+          profile_correction_cutoff &&
+          profile_correction_cutoff->is_ready(n_q_points);
         for (unsigned int q = 0; q < n_q_points; ++q)
         {
           const auto correction = CahnHilliard::evaluate_profile_correction(
@@ -1154,12 +1159,25 @@ namespace NavierStokesScratch
             enable_tracer_stabilization ? tracer_hessians[q] : Tensor<2, dim>(),
             epsilon,
             enable_tracer_stabilization);
-          profile_correction_flux[q] =
-            profile_correction_coefficient * correction.flux;
+          profile_correction_weight[q] =
+            with_cutoff ?
+              profile_correction_cutoff->weight(active_cell_index, q) :
+              1.;
+          profile_correction_weight_gradient[q] =
+            with_cutoff ?
+              profile_correction_cutoff->weight_gradient(active_cell_index, q) :
+              Tensor<1, dim>();
+          profile_correction_flux[q] = profile_correction_coefficient *
+                                       profile_correction_weight[q] *
+                                       correction.flux;
+          // div(w F) = w div(F) + grad(w).F for the frozen weight w.
           if (enable_tracer_stabilization)
             profile_correction_divergence[q] =
-              profile_correction_coefficient * correction.divergence;
+              profile_correction_coefficient *
+              (profile_correction_weight[q] * correction.divergence +
+               profile_correction_weight_gradient[q] * correction.flux);
         }
+      }
 
       for (unsigned int q = 0; q < n_q_points; ++q)
       {
@@ -1326,8 +1344,9 @@ namespace NavierStokesScratch
        * current cell, extracted from the hp::FEValues with
        * get_present_fe_values().
        */
-      active_fe_index  = cell->active_fe_index();
-      active_fe_values = this->reinit(cell, false);
+      active_fe_index   = cell->active_fe_index();
+      active_cell_index = cell->active_cell_index();
+      active_fe_values  = this->reinit(cell, false);
       if constexpr (enable_pseudo_solid)
         active_fe_values_fixed = this->reinit(cell, true);
 
@@ -1474,6 +1493,7 @@ namespace NavierStokesScratch
 
   public:
     unsigned int active_fe_index;
+    unsigned int active_cell_index;
 
   private:
     // Non-owning pointers for active FEValues/FaceValues
@@ -1766,6 +1786,13 @@ namespace NavierStokesScratch
     double                      profile_correction_coefficient = 0.;
     std::vector<Tensor<1, dim>> profile_correction_flux;
     std::vector<double>         profile_correction_divergence;
+    // Optional interaction cutoff and strain scaling, frozen over the time
+    // step. The correction coefficient is multiplied by the weight r (1 - chi);
+    // its gradient enters the divergence of the correction flux.
+    const CahnHilliard::ProfileCorrectionCutoff<dim>
+                               *profile_correction_cutoff = nullptr;
+    std::vector<double>         profile_correction_weight;
+    std::vector<Tensor<1, dim>> profile_correction_weight_gradient;
 
     std::vector<Tensor<1, dim>> diffusive_flux;
     std::vector<double>         tau_supg_tracer;

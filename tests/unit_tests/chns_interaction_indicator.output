@@ -1,0 +1,10 @@
+DEAL::dim 2: planar tanh profiles kept
+DEAL::dim 3: planar tanh profiles kept
+DEAL::dim 2, a = 2.00000 eps: phi_c = 0.217719, Lambda = -1.60886, weights (+,-) = (1.00000, 0.00000), negative phase (0.00000, 1.00000)
+DEAL::dim 2, a = 3.00000 eps: phi_c = 0.571833, Lambda = -1.78592, weights (+,-) = (1.00000, 0.00000), negative phase (0.00000, 1.00000)
+DEAL::dim 2, a = 4.00000 eps: phi_c = 0.776771, Lambda = -1.88839, weights (+,-) = (1.00000, 0.00000), negative phase (0.00000, 1.00000)
+DEAL::dim 3, a = 2.00000 eps: phi_c = 0.217719, Lambda = -1.60886, weights (+,-) = (1.00000, 0.00000), negative phase (0.00000, 1.00000)
+DEAL::dim 3, a = 3.00000 eps: phi_c = 0.571833, Lambda = -1.78592, weights (+,-) = (1.00000, 0.00000), negative phase (0.00000, 1.00000)
+DEAL::dim 3, a = 4.00000 eps: phi_c = 0.776771, Lambda = -1.88839, weights (+,-) = (1.00000, 0.00000), negative phase (0.00000, 1.00000)
+DEAL::disk R = 0.400000 eps: Lambda = 0.00000, kappa eps = 2.50000, weights (+,-) = (1.00000, 0.00000)
+DEAL::disk R = 10.0000 eps: Lambda = 0.00000, kappa eps = 0.100000, weights (+,-) = (0.00000, 0.00000)

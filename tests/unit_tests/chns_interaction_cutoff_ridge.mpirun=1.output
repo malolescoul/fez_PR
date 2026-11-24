@@ -1,0 +1,8 @@
+DEAL::planar tanh: chi inside 0.00, outside 0.00
+DEAL::distance profile, a = 7 eps, on a face: chi inside 0.00, outside 0.00
+DEAL::distance profile, a = 5 eps, on a face: chi inside 1.00, outside 0.00
+DEAL::distance profile, a = 4 eps, on a face: chi inside 1.00, outside 0.00
+DEAL::distance profile, a = 5 eps, inside cells: chi inside 0.41, outside 0.00
+DEAL::distance profile, a = 4 eps, inside cells: chi inside 1.00, outside 0.00
+DEAL::gas distance profile, a = 4 eps: chi inside 1.00, outside 0.00
+DEAL::two tanh, a = 4 eps, on a face: chi inside 1.00, outside 0.00

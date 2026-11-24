@@ -239,6 +239,7 @@ namespace NavierStokesScratch
     , time_handler(other.time_handler)
   {
     profile_correction_coefficient = other.profile_correction_coefficient;
+    profile_correction_cutoff      = other.profile_correction_cutoff;
     if constexpr (has_hp_capabilities)
     {
       hp_fe_values = std::make_unique<hp::FEValues<dim>>(
@@ -688,6 +689,8 @@ namespace NavierStokesScratch
       if (param.cahn_hilliard.enable_profile_correction)
       {
         profile_correction_flux.resize(n_q_points);
+        profile_correction_weight.resize(n_q_points, 1.);
+        profile_correction_weight_gradient.resize(n_q_points);
         if (enable_tracer_stabilization)
           profile_correction_divergence.resize(n_q_points);
       }

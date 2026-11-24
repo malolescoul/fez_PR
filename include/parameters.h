@@ -887,6 +887,18 @@ namespace Parameters
     bool   with_tracer_limiter;
     bool   enable_profile_correction   = false;
     double profile_correction_strength = 0.6;
+    // Switch the correction off where interfaces interact (filaments, notches,
+    // folds below epsilon).
+    bool enable_profile_correction_cutoff = false;
+    // Start of the |kappa eps| ramp and relaxation times of the cutoff.
+    double profile_correction_cutoff_kappa_start = 1.;
+    double profile_correction_cutoff_rise_time   = 0.;
+    double profile_correction_cutoff_decay_time  = 0.;
+    // Local scaling of the strength by the normal strain of the flow.
+    bool   enable_profile_correction_strain_scaling = false;
+    double profile_correction_strain_target_iso     = 0.9999;
+    double profile_correction_strain_safety         = 2.;
+    double profile_correction_strain_max_ratio      = 10.;
 
     // Mesh forcing parameters control the source term in the pseudosolid
     // equation of CHNS-ALE. Explicit names now distinguish the two factors.

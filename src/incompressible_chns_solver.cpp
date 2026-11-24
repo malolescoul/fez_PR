@@ -109,6 +109,35 @@ CHNSSolver<dim, with_moving_mesh, with_enlarged>::CHNSSolver(
                 ExcMessage("Profile correction requires positive interface "
                            "thickness and surface tension."));
   }
+  if (param.cahn_hilliard.enable_profile_correction_cutoff)
+  {
+    AssertThrow(param.cahn_hilliard.enable_profile_correction,
+                ExcMessage("The interaction cutoff requires the profile "
+                           "correction."));
+    // The indicators use the Hessian of phi, which vanishes inside linear
+    // elements.
+    AssertThrow(param.finite_elements.tracer_degree >= 2,
+                ExcMessage("The interaction cutoff requires a tracer of "
+                           "degree 2 or more."));
+    AssertThrow(!with_moving_mesh,
+                ExcMessage("The interaction cutoff is not available on moving "
+                           "meshes yet."));
+    AssertThrow(!param.mms_param.enable,
+                ExcMessage("The manufactured source does not include the "
+                           "interaction cutoff."));
+  }
+  if (param.cahn_hilliard.enable_profile_correction_strain_scaling)
+  {
+    AssertThrow(param.cahn_hilliard.enable_profile_correction,
+                ExcMessage("The strain scaling requires the profile "
+                           "correction."));
+    AssertThrow(!with_moving_mesh,
+                ExcMessage("The strain scaling is not available on moving "
+                           "meshes yet."));
+    AssertThrow(!param.mms_param.enable,
+                ExcMessage("The manufactured source does not include the "
+                           "strain scaling."));
+  }
   if constexpr (with_enlarged)
   {
     // Enlarged ALE: same layout as the moving-mesh CHNS, with the extra psi
@@ -458,6 +487,72 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::prepare_timestep()
     source->set_profile_correction_coefficient(
       compute_profile_correction_coefficient(true));
   }
+
+  const auto &ch = this->param.cahn_hilliard;
+  if (ch.enable_profile_correction_cutoff ||
+      ch.enable_profile_correction_strain_scaling)
+  {
+    // Strain held by the unscaled correction at the target iso.
+    const double epsilon = ch.epsilon_interface;
+    const double reference =
+      2. * compute_profile_correction_coefficient(false, true) *
+      CahnHilliard::profile_correction_gain(
+        ch.profile_correction_strain_target_iso, epsilon) /
+      (epsilon * epsilon);
+    if (!profile_correction_cutoff ||
+        &profile_correction_cutoff->get_triangulation() != this->triangulation)
+    {
+      CahnHilliard::InteractionCutoffParameters cutoff_parameters;
+      cutoff_parameters.kappa_start = ch.profile_correction_cutoff_kappa_start;
+      cutoff_parameters.rise_time   = ch.profile_correction_cutoff_rise_time;
+      cutoff_parameters.decay_time  = ch.profile_correction_cutoff_decay_time;
+      cutoff_parameters.cutoff      = ch.enable_profile_correction_cutoff;
+      cutoff_parameters.strain_scaling =
+        ch.enable_profile_correction_strain_scaling;
+      cutoff_parameters.strain_band   = ch.profile_correction_strain_target_iso;
+      cutoff_parameters.strain_safety = ch.profile_correction_strain_safety;
+      cutoff_parameters.max_strain_ratio =
+        ch.profile_correction_strain_max_ratio;
+      profile_correction_cutoff =
+        std::make_unique<CahnHilliard::ProfileCorrectionCutoff<dim>>(
+          *this->triangulation, cutoff_parameters);
+    }
+    profile_correction_cutoff->set_strain_reference(reference);
+    // Evaluated on the last accepted state, then frozen over the step and
+    // during the Newton iterations.
+    const auto stats = profile_correction_cutoff->update(
+      *this->dof_handler,
+      *this->moving_mapping,
+      *this->quadrature,
+      (*this->previous_solutions)[0],
+      this->ordering->phi_lower,
+      epsilon,
+      this->time_handler.current_time_iteration,
+      this->time_handler.current_dt,
+      this->ordering->u_lower);
+    if (scratch_data)
+      scratch_data->profile_correction_cutoff = profile_correction_cutoff.get();
+    if (this->param.nonlinear_solver.verbosity ==
+        Parameters::Verbosity::verbose)
+    {
+      this->pcout << "Profile correction cutoff: max chi = " << stats.max_chi
+                  << ", " << stats.n_cut_cells << " cells above 0.5"
+                  << std::endl;
+      this->pcout << "Interface normal strain: max = " << stats.max_strain
+                  << ", held = " << reference;
+      if (ch.enable_profile_correction_strain_scaling)
+        this->pcout << ", max strength ratio = " << stats.max_ratio;
+      this->pcout << std::endl;
+    }
+  }
+}
+
+template <int dim, bool with_moving_mesh, bool with_enlarged>
+void CHNSSolver<dim, with_moving_mesh, with_enlarged>::
+  add_solver_specific_postprocessing_data()
+{
+  if (profile_correction_cutoff)
+    profile_correction_cutoff->add_data(*this->postproc_handler);
 }
 
 template <int dim, bool with_moving_mesh, bool with_enlarged>

@@ -1786,6 +1786,59 @@ namespace Parameters
                           Patterns::Double(0.),
                           "Multiplier of 2*M_max*sigma_tilde/epsilon in the "
                           "profile correction flux.");
+        prm.enter_subsection("interaction cutoff");
+        {
+          prm.declare_entry(
+            "enable",
+            "false",
+            Patterns::Bool(),
+            "Switch the profile correction off where two interfaces overlap "
+            "or where an interface folds below epsilon. Requires a tracer of "
+            "degree 2 or more and a fixed mesh.");
+          prm.declare_entry("curvature threshold",
+                            "1",
+                            Patterns::Double(0.),
+                            "|kappa eps| at which the fold detection starts. "
+                            "The cut is complete at twice this value, that "
+                            "is for a radius of curvature of epsilon/(2 "
+                            "threshold).");
+          prm.declare_entry("rise time",
+                            "0",
+                            Patterns::Double(0.),
+                            "Relaxation time of the cutoff when it increases. "
+                            "0 follows the detection instantaneously.");
+          prm.declare_entry("decay time",
+                            "0",
+                            Patterns::Double(0.),
+                            "Relaxation time of the cutoff when it decreases. "
+                            "0 follows the detection instantaneously.");
+        }
+        prm.leave_subsection();
+        prm.enter_subsection("strain scaling");
+        {
+          prm.declare_entry(
+            "enable",
+            "false",
+            Patterns::Bool(),
+            "Scale the strength locally so that the correction holds the "
+            "normal strain n.grad(u).n stretching the interface. Requires a "
+            "fixed mesh.");
+          prm.declare_entry("target iso",
+                            "0.9999",
+                            Patterns::Double(0., 1.),
+                            "|phi| of the isoline to hold. The strain is "
+                            "measured where |phi| is below this value.");
+          prm.declare_entry("safety factor",
+                            "2",
+                            Patterns::Double(0.),
+                            "Ratio between the strain held at the target iso "
+                            "and the measured stretching.");
+          prm.declare_entry("max ratio",
+                            "10",
+                            Patterns::Double(1.),
+                            "Maximum local multiplier of the strength.");
+        }
+        prm.leave_subsection();
       }
       prm.leave_subsection();
       // Moving-mesh forcing parameters
@@ -1902,6 +1955,23 @@ namespace Parameters
         enable_profile_correction = prm.get_bool("enable profile correction");
         profile_correction_strength =
           prm.get_double("profile correction strength");
+        prm.enter_subsection("interaction cutoff");
+        {
+          enable_profile_correction_cutoff = prm.get_bool("enable");
+          profile_correction_cutoff_kappa_start =
+            prm.get_double("curvature threshold");
+          profile_correction_cutoff_rise_time  = prm.get_double("rise time");
+          profile_correction_cutoff_decay_time = prm.get_double("decay time");
+        }
+        prm.leave_subsection();
+        prm.enter_subsection("strain scaling");
+        {
+          enable_profile_correction_strain_scaling = prm.get_bool("enable");
+          profile_correction_strain_target_iso = prm.get_double("target iso");
+          profile_correction_strain_safety    = prm.get_double("safety factor");
+          profile_correction_strain_max_ratio = prm.get_double("max ratio");
+        }
+        prm.leave_subsection();
       }
       prm.leave_subsection();
       // moving-mesh forcing parameters

@@ -2,6 +2,7 @@
 #define INCOMPRESSIBLE_CHNS_SOLVER_H
 
 #include <assembly/assembler.h>
+#include <chns_profile_correction_cutoff.h>
 #include <copy_data.h>
 #include <deal.II/fe/fe_values_extractors.h>
 #include <navier_stokes_solver.h>
@@ -131,6 +132,11 @@ public:
    */
   virtual void solver_specific_post_processing() override;
 
+  /**
+   * Add the interaction cutoff of the profile correction to the outputs.
+   */
+  virtual void add_solver_specific_postprocessing_data() override;
+
 protected:
   virtual std::vector<std::pair<std::string, unsigned int>>
   get_additional_variables_description() const override
@@ -156,6 +162,11 @@ protected:
     const_ordering = {};
 
   std::unique_ptr<ScratchData> scratch_data;
+
+  // Interaction cutoff of the profile correction, recomputed at the start of
+  // each time step.
+  std::unique_ptr<CahnHilliard::ProfileCorrectionCutoff<dim>>
+    profile_correction_cutoff;
 
   std::vector<std::unique_ptr<Assembler>> assemblers;
 
