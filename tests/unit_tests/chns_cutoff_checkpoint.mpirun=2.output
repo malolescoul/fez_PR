@@ -1,0 +1,4 @@
+
+DEAL::chi after 2 steps 0.3600, restored 0.3600
+DEAL::chi at step 3: uninterrupted 0.4880, restarted with chi 0.4880, restarted without chi 0.2000
+DEAL::attached data sets: 1 with chi, 0 without, 0 after dropping chi

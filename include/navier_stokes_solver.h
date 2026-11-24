@@ -501,6 +501,28 @@ public:
   void restart();
 
   /**
+   * Attach solver-specific data to the triangulation in checkpoint(), after
+   * the solutions and right before the triangulation is saved. Release it in
+   * finish_solver_specific_checkpoint(), called once the triangulation is
+   * saved.
+   */
+  virtual void prepare_solver_specific_checkpoint() {}
+  virtual void finish_solver_specific_checkpoint() {}
+
+  /**
+   * Read the data attached by prepare_solver_specific_checkpoint(), in
+   * restart(), once the solutions are loaded. n_attached is the number of data
+   * sets attached to the cells beyond the solutions in the checkpoint read:
+   * zero for a checkpoint written without them. Each of them must be read.
+   */
+  virtual void load_solver_specific_checkpoint(const unsigned int n_attached)
+  {
+    AssertThrow(n_attached == 0,
+                ExcMessage("The checkpoint holds data that this solver does "
+                           "not read."));
+  }
+
+  /**
    * Save this object to file. See also the comments for the checkpoint()
    * function. This function currently only saves the present and previous
    * solution vectors.

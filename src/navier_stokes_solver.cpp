@@ -1565,7 +1565,9 @@ void NavierStokesSolver<dim, with_moving_mesh>::checkpoint()
     solution_transfer->prepare_for_serialization(all_in);
   }
 
+  prepare_solver_specific_checkpoint();
   triangulation->save(tmp_checkpoint_prefix);
+  finish_solver_specific_checkpoint();
   postproc_handler->save_chns_energy(tmp_checkpoint_prefix);
 
   replace_temporary_files(param.output.output_dir,
@@ -1657,6 +1659,26 @@ void NavierStokesSolver<dim, with_moving_mesh>::restart()
     archive >> *this;
     archive >> time_handler;
   }
+
+  // Data sets attached to the cells beyond the solutions (one with AMR, none
+  // otherwise), read from the .info file written with the triangulation.
+  unsigned int n_attached = 0;
+  if (mpi_rank == 0)
+  {
+    std::ifstream info(checkpoint_prefix + ".info");
+    AssertThrow(info, ExcMessage("Could not read the checkpoint .info file."));
+    std::string  header;
+    unsigned int version, n_procs, n_fixed, n_variable;
+    std::getline(info, header);
+    info >> version >> n_procs >> n_fixed >> n_variable;
+    AssertThrow(info, ExcMessage("Could not parse the checkpoint .info file."));
+    n_attached = n_fixed + n_variable;
+  }
+  n_attached = Utilities::MPI::broadcast(mpi_communicator, n_attached, 0);
+  const unsigned int n_solution_sets = with_amr ? 1 : 0;
+  AssertThrow(n_attached >= n_solution_sets,
+              ExcMessage("The checkpoint does not hold the solutions."));
+  load_solver_specific_checkpoint(n_attached - n_solution_sets);
 
   postproc_handler->load_chns_energy(checkpoint_prefix);
 

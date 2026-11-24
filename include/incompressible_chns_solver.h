@@ -137,6 +137,19 @@ public:
    */
   virtual void add_solver_specific_postprocessing_data() override;
 
+  /**
+   * Save chi, the state of the interaction cutoff, in the checkpoints, and
+   * read it back at restart. Checkpoints written without it restart with
+   * chi = 0.
+   */
+  virtual void prepare_solver_specific_checkpoint() override;
+  virtual void finish_solver_specific_checkpoint() override;
+  virtual void
+  load_solver_specific_checkpoint(const unsigned int n_attached) override;
+
+  // Create the interaction cutoff on the current triangulation, if needed.
+  void create_profile_correction_cutoff();
+
 protected:
   virtual std::vector<std::pair<std::string, unsigned int>>
   get_additional_variables_description() const override

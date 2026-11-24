@@ -350,12 +350,7 @@ namespace CahnHilliard
       const auto  comm    = source.get_mpi_communicator();
       const bool  simplex = source.get_fe().reference_cell().is_simplex();
       if (!fe)
-      {
-        if (simplex)
-          fe = std::make_unique<FE_SimplexP<dim>>(1);
-        else
-          fe = std::make_unique<FE_Q<dim>>(1);
-      }
+        fe = make_linear_element(simplex);
       // The numbering is deterministic: on an unchanged or just transferred
       // mesh, the previous chi keeps its meaning.
       dofs.distribute_dofs(*fe);
@@ -747,7 +742,84 @@ namespace CahnHilliard
      * and the ratio r to an output object exposing add_data_vector and
      * add_cell_data_vector.
      */
+    /**
+     * Checkpointing of chi, the only state carried from one step to the next
+     * (with relaxation). prepare_serialization() attaches chi of the last
+     * accepted step to the triangulation before it is saved, and returns
+     * whether there was a state to save. Release it with
+     * finish_serialization() once the triangulation is saved.
+     */
+    bool prepare_serialization()
+    {
+      if (!relaxation() || !fe || field.size() == 0 ||
+          field.size() != dofs.n_dofs())
+        return false;
+      serialization =
+        std::make_unique<SolutionTransfer<dim, LA::ParVectorType>>(dofs);
+      serialization->prepare_for_serialization(field);
+      return true;
+    }
+
+    void finish_serialization() { serialization.reset(); }
+
+    /**
+     * Read chi attached by prepare_serialization(), once the triangulation
+     * and the solutions are loaded. The next update() relaxes from it as from
+     * the last accepted step.
+     */
+    void deserialize(const bool simplex)
+    {
+      if (!fe)
+        fe = make_linear_element(simplex);
+      const auto comm = dofs.get_mpi_communicator();
+      dofs.distribute_dofs(*fe);
+      const IndexSet owned    = dofs.locally_owned_dofs();
+      const IndexSet relevant = DoFTools::extract_locally_relevant_dofs(dofs);
+      LA::ParVectorType                        loaded(owned, comm);
+      SolutionTransfer<dim, LA::ParVectorType> transfer_in(dofs);
+      transfer_in.deserialize(loaded);
+      AffineConstraints<double> constraints(owned, relevant);
+      DoFTools::make_hanging_node_constraints(dofs, constraints);
+      constraints.close();
+      constraints.distribute(loaded);
+      field.reinit(owned, relevant, comm);
+      field        = loaded;
+      current_step = numbers::invalid_unsigned_int;
+      n_q_points   = 0;
+    }
+
+    /**
+     * Read and drop a chi field attached to a checkpoint, when the run that
+     * restarts uses neither the cutoff nor the strain scaling: every data set
+     * attached to a loaded triangulation must be read.
+     */
+    static void discard_serialized(const Triangulation<dim> &tria,
+                                   const bool                simplex)
+    {
+      const auto      element = make_linear_element(simplex);
+      DoFHandler<dim> dof_handler(tria);
+      dof_handler.distribute_dofs(*element);
+      LA::ParVectorType dropped(dof_handler.locally_owned_dofs(),
+                                dof_handler.get_mpi_communicator());
+      SolutionTransfer<dim, LA::ParVectorType> transfer_in(dof_handler);
+      transfer_in.deserialize(dropped);
+    }
+
+    // Largest value of chi, for the log.
+    double largest_chi() const
+    {
+      return field.size() > 0 ? field.linfty_norm() : 0.;
+    }
+
   private:
+    static std::unique_ptr<FiniteElement<dim>>
+    make_linear_element(const bool simplex)
+    {
+      if (simplex)
+        return std::make_unique<FE_SimplexP<dim>>(1);
+      return std::make_unique<FE_Q<dim>>(1);
+    }
+
     bool relaxation() const
     {
       return parameters.rise_time > 0. || parameters.decay_time > 0.;
@@ -821,6 +893,8 @@ namespace CahnHilliard
     LA::ParVectorType accepted;
     unsigned int      current_step = numbers::invalid_unsigned_int;
     std::unique_ptr<SolutionTransfer<dim, LA::ParVectorType>> transfer;
+    // chi attached to the triangulation while a checkpoint is written.
+    std::unique_ptr<SolutionTransfer<dim, LA::ParVectorType>> serialization;
     Vector<float>                                             lambda_cell;
     Vector<float>                                             kappa_cell;
     // Normal strain per cell (empty without velocity) and ratio r.

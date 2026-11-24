@@ -513,24 +513,7 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::prepare_timestep()
         epsilon,
         ch.profile_correction_frozen_normal) /
       (epsilon * epsilon);
-    if (!profile_correction_cutoff ||
-        &profile_correction_cutoff->get_triangulation() != this->triangulation)
-    {
-      CahnHilliard::InteractionCutoffParameters cutoff_parameters;
-      cutoff_parameters.kappa_start = ch.profile_correction_cutoff_kappa_start;
-      cutoff_parameters.rise_time   = ch.profile_correction_cutoff_rise_time;
-      cutoff_parameters.decay_time  = ch.profile_correction_cutoff_decay_time;
-      cutoff_parameters.cutoff      = ch.enable_profile_correction_cutoff;
-      cutoff_parameters.strain_scaling =
-        ch.enable_profile_correction_strain_scaling;
-      cutoff_parameters.strain_band   = ch.profile_correction_strain_target_iso;
-      cutoff_parameters.strain_safety = ch.profile_correction_strain_safety;
-      cutoff_parameters.max_strain_ratio =
-        ch.profile_correction_strain_max_ratio;
-      profile_correction_cutoff =
-        std::make_unique<CahnHilliard::ProfileCorrectionCutoff<dim>>(
-          *this->triangulation, cutoff_parameters);
-    }
+    create_profile_correction_cutoff();
     profile_correction_cutoff->set_strain_reference(reference);
     // Evaluated on the last accepted state, then frozen over the step and
     // during the Newton iterations.
@@ -559,6 +542,72 @@ void CHNSSolver<dim, with_moving_mesh, with_enlarged>::prepare_timestep()
       this->pcout << std::endl;
     }
   }
+}
+
+template <int dim, bool with_moving_mesh, bool with_enlarged>
+void CHNSSolver<dim, with_moving_mesh, with_enlarged>::
+  create_profile_correction_cutoff()
+{
+  if (profile_correction_cutoff &&
+      &profile_correction_cutoff->get_triangulation() == this->triangulation)
+    return;
+  const auto                               &ch = this->param.cahn_hilliard;
+  CahnHilliard::InteractionCutoffParameters cutoff_parameters;
+  cutoff_parameters.kappa_start = ch.profile_correction_cutoff_kappa_start;
+  cutoff_parameters.rise_time   = ch.profile_correction_cutoff_rise_time;
+  cutoff_parameters.decay_time  = ch.profile_correction_cutoff_decay_time;
+  cutoff_parameters.cutoff      = ch.enable_profile_correction_cutoff;
+  cutoff_parameters.strain_scaling =
+    ch.enable_profile_correction_strain_scaling;
+  cutoff_parameters.strain_band      = ch.profile_correction_strain_target_iso;
+  cutoff_parameters.strain_safety    = ch.profile_correction_strain_safety;
+  cutoff_parameters.max_strain_ratio = ch.profile_correction_strain_max_ratio;
+  profile_correction_cutoff =
+    std::make_unique<CahnHilliard::ProfileCorrectionCutoff<dim>>(
+      *this->triangulation, cutoff_parameters);
+}
+
+template <int dim, bool with_moving_mesh, bool with_enlarged>
+void CHNSSolver<dim, with_moving_mesh, with_enlarged>::
+  prepare_solver_specific_checkpoint()
+{
+  if (profile_correction_cutoff)
+    profile_correction_cutoff->prepare_serialization();
+}
+
+template <int dim, bool with_moving_mesh, bool with_enlarged>
+void CHNSSolver<dim, with_moving_mesh, with_enlarged>::
+  finish_solver_specific_checkpoint()
+{
+  if (profile_correction_cutoff)
+    profile_correction_cutoff->finish_serialization();
+}
+
+template <int dim, bool with_moving_mesh, bool with_enlarged>
+void CHNSSolver<dim, with_moving_mesh, with_enlarged>::
+  load_solver_specific_checkpoint(const unsigned int n_attached)
+{
+  // Checkpoints written before chi was saved hold nothing more: chi then
+  // starts from zero.
+  if (n_attached == 0)
+    return;
+  AssertThrow(n_attached == 1,
+              ExcMessage("The checkpoint holds data that this solver does "
+                         "not read."));
+  const bool  simplex = fe->reference_cell().is_simplex();
+  const auto &ch      = this->param.cahn_hilliard;
+  if (ch.enable_profile_correction_cutoff ||
+      ch.enable_profile_correction_strain_scaling)
+  {
+    create_profile_correction_cutoff();
+    profile_correction_cutoff->deserialize(simplex);
+    this->pcout << "Profile correction cutoff restored from the checkpoint: "
+                << "max chi = " << profile_correction_cutoff->largest_chi()
+                << std::endl;
+  }
+  else
+    CahnHilliard::ProfileCorrectionCutoff<dim>::discard_serialized(
+      *this->triangulation, simplex);
 }
 
 template <int dim, bool with_moving_mesh, bool with_enlarged>
