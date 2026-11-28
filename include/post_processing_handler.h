@@ -211,6 +211,13 @@ public:
   void serialize(Archive &ar, const unsigned int version);
 
   /**
+   * Clear the data serialized by serialize(). This is used when a simulation
+   * restarted from a checkpoint is a new simulation, whose postprocessing
+   * starts from scratch, see TimeHandler::continues_checkpointed_simulation().
+   */
+  void clear_serialized_data();
+
+  /**
    * Calls the postprocess() function for each of the dof-based postprocessor
    * stored in field_postprocessors, and adds the computed data to the
    * underlying DataOut.
@@ -1307,6 +1314,21 @@ void PostProcessingHandler<dim>::serialize(Archive &ar,
   ar &average_velocity_phases;
   ar &visualization_times_and_names;
   ar &visualization_times_and_names_skin;
+}
+
+template <int dim>
+void PostProcessingHandler<dim>::clear_serialized_data()
+{
+  // The members serialized in serialize()
+  forces_table.clear();
+  forces_table_per_slice.clear();
+  structure_mean_position_table.clear();
+  field_integral_tables.clear();
+  volume_of_phases.clear();
+  center_of_mass_phases.clear();
+  average_velocity_phases.clear();
+  visualization_times_and_names.clear();
+  visualization_times_and_names_skin.clear();
 }
 
 #endif

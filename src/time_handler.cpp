@@ -21,6 +21,7 @@ TimeHandler::TimeHandler(const Parameters::TimeIntegration &time_parameters)
   , current_time_iteration(0)
   , current_time_iteration_in_interval(0)
   , time_iteration_at_last_restart(0)
+  , continues_checkpoint(false)
   , initial_time(time_parameters.t_initial)
   , final_time(time_parameters.t_end)
   , initial_times(n_time_intervals)
@@ -139,6 +140,11 @@ void TimeHandler::validate_parameters(const ComponentOrdering &ordering) const
 bool TimeHandler::is_steady() const
 {
   return steady_scheme;
+}
+
+bool TimeHandler::continues_checkpointed_simulation() const
+{
+  return continues_checkpoint;
 }
 
 bool TimeHandler::is_starting_step() const
@@ -637,6 +643,7 @@ void TimeHandler::update_parameters_after_restart(
   // Save it before overwriting with the new simulation's scheme.
   const bool is_checkpoint_steady = steady_scheme;
   steady_scheme                   = new_parameters.scheme == STAT;
+  continues_checkpoint            = is_checkpoint_steady == steady_scheme;
 
   // Nothing to update if current solver is steady-state
   if (steady_scheme)

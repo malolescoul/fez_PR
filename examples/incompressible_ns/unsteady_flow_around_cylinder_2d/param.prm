@@ -106,7 +106,7 @@ end
 #
 subsection Checkpoint Restart
   set enable checkpoint    = true
-  set restart              = true
+  set restart              = false
   set restart from         = latest
   set checkpoint prefix    = checkpoint
   set checkpoint frequency = 10

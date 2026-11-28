@@ -55,6 +55,16 @@ public:
   bool is_steady() const;
 
   /**
+   * Returns true if this simulation was restarted from a checkpoint and
+   * continues the checkpointed simulation, i.e., if both are steady or both
+   * are unsteady. Restarting an unsteady simulation from a stationary
+   * checkpoint, or the other way around, starts a new simulation from the
+   * checkpointed solution, and this function returns false. It also returns
+   * false if the simulation was not restarted.
+   */
+  bool continues_checkpointed_simulation() const;
+
+  /**
    * For BDF methods, return true if the current time step is a
    * "starting step" (none for BDF1, first for BDF2).
    */
@@ -292,6 +302,9 @@ public:
 
   // Time step counter at which the last restart happened
   unsigned int time_iteration_at_last_restart;
+
+  // True if this simulation continues a checkpointed simulation
+  bool continues_checkpoint;
 
   // Initial time (for this subinterval)
   double initial_time;

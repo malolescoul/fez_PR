@@ -1,6 +1,6 @@
 
-#include <boost/archive/text_iarchive.hpp>
-#include <boost/archive/text_oarchive.hpp>
+#include <boost/archive/binary_iarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
 #include <checkpoint_tools.h>
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/error_estimator.h>
@@ -283,7 +283,6 @@ void NavierStokesSolver<dim, with_moving_mesh>::run_time_subinterval(
    * vectors. If restarting, setup_dofs() is called in the restart() function,
    * after loading the mesh.
    */
-  bool postprocessing_restored = false;
   if (!param.checkpoint_restart.restart)
   {
     if (should_create_triangulation())
@@ -296,7 +295,7 @@ void NavierStokesSolver<dim, with_moving_mesh>::run_time_subinterval(
     AssertThrow(!param.with_tree_based_adaptation(),
                 ExcMessage("Simulation restart with adaptive mesh refinement "
                            "(AMR) it currently not implemented."));
-    postprocessing_restored = restart();
+    restart();
   }
 
   setup_mappings();
@@ -360,10 +359,13 @@ void NavierStokesSolver<dim, with_moving_mesh>::run_time_subinterval(
   // solution was already postprocessed before writing the checkpoint, and is
   // not postprocessed again, as in an uninterrupted simulation. Only the
   // errors, which are not checkpointed, are computed again.
-  if (!postprocessing_restored)
+  if (time_handler.continues_checkpointed_simulation())
+  {
+    if (should_compute_errors(time_handler))
+      compute_errors();
+  }
+  else
     postprocess_solution();
-  else if (should_compute_errors(time_handler))
-    compute_errors();
 
   while (!time_handler.is_finished())
   {
@@ -1309,7 +1311,10 @@ void NavierStokesSolver<dim, with_moving_mesh>::save(
   const unsigned int /* version */) const
 {
   ar &(*present_solution);
-  ar & previous_solutions->size();
+  // Saved with the same type as it is loaded in load(), which binary archives
+  // require
+  const unsigned int n_previous_solutions = previous_solutions->size();
+  ar                &n_previous_solutions;
   for (const auto &previous_solution : *previous_solutions)
     ar &previous_solution;
 }
@@ -1388,10 +1393,11 @@ void NavierStokesSolver<dim, with_moving_mesh>::checkpoint()
     // Write a checkpoint file for each rank
     // All ranks will read the same local range for their PETSc vector otherwise
     std::ofstream checkpoint_file(directory + "state_rank" +
-                                  std::to_string(mpi_rank));
+                                    std::to_string(mpi_rank),
+                                  std::ios::binary);
     AssertThrow(checkpoint_file,
                 ExcMessage("Could not write to the checkpoint file."));
-    boost::archive::text_oarchive archive(checkpoint_file);
+    boost::archive::binary_oarchive archive(checkpoint_file);
 
     archive << *this;
     archive << time_handler;
@@ -1414,7 +1420,7 @@ void NavierStokesSolver<dim, with_moving_mesh>::checkpoint()
 }
 
 template <int dim, bool with_moving_mesh>
-bool NavierStokesSolver<dim, with_moving_mesh>::restart()
+void NavierStokesSolver<dim, with_moving_mesh>::restart()
 {
   const auto       &checkpoint_param = param.checkpoint_restart;
   const std::string directory =
@@ -1435,29 +1441,25 @@ bool NavierStokesSolver<dim, with_moving_mesh>::restart()
   // the stored solutions
   setup_dofs();
 
-  bool postprocessing_restored = false;
-  {
-    std::ifstream checkpoint_file(directory + "state_rank" +
-                                  std::to_string(mpi_rank));
-    AssertThrow(checkpoint_file,
-                ExcMessage("Could not read from the checkpoint file."));
-    boost::archive::text_iarchive archive(checkpoint_file);
+  std::ifstream checkpoint_file(directory + "state_rank" +
+                                  std::to_string(mpi_rank),
+                                std::ios::binary);
+  AssertThrow(checkpoint_file,
+              ExcMessage("Could not read from the checkpoint file."));
+  boost::archive::binary_iarchive archive(checkpoint_file);
 
-    archive >> *this;
-    archive >> time_handler;
+  archive >> *this;
+  archive >> time_handler;
+  archive >> *postproc_handler;
 
-    // time_handler.is_steady() refers to the checkpointed simulation,
-    // param.time_integration stores the data of the current simulation
-    postprocessing_restored =
-      time_handler.is_steady() == param.time_integration.is_steady();
-    if (postprocessing_restored)
-      archive >> *postproc_handler;
-  }
-
-  // Update the time handler
+  // Update the time handler with the parameters of the current simulation
   time_handler.update_parameters_after_restart(param.time_integration);
 
-  return postprocessing_restored;
+  // The postprocessing data of a new simulation start from scratch. They are
+  // read above anyway, so that the content of the archive does not depend on
+  // the restarted simulation.
+  if (!time_handler.continues_checkpointed_simulation())
+    postproc_handler->clear_serialized_data();
 }
 
 // Explicit instantiation
