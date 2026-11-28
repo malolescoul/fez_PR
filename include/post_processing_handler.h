@@ -1,6 +1,10 @@
 #ifndef POST_PROCESSING_HANDLER_H
 #define POST_PROCESSING_HANDLER_H
 
+#include <boost/serialization/map.hpp>
+#include <boost/serialization/string.hpp>
+#include <boost/serialization/utility.hpp>
+#include <boost/serialization/vector.hpp>
 #include <components_ordering.h>
 #include <deal.II/base/table_handler.h>
 #include <deal.II/base/timer.h>
@@ -192,6 +196,26 @@ public:
    * a suffix with the current convergence step is appended to the pvd file.
    */
   void write_pvd(const PrefixData &prefix_data = PrefixData()) const;
+
+  /**
+   * Save or load this object for checkpoint/restart. The following data are
+   * serialized:
+   *
+   *  - postprocessing tables
+   *  - records of the .pvd files
+   *
+   * The other class members (DataOut objects, postprocessors, slice indices,
+   * etc.) are not serialized, and are recreated on restart.
+   */
+  template <class Archive>
+  void serialize(Archive &ar, const unsigned int version);
+
+  /**
+   * Clear the data serialized by serialize(). This is used when a simulation
+   * restarted from a checkpoint is a new simulation, whose postprocessing
+   * starts from scratch, see TimeHandler::continues_checkpointed_simulation().
+   */
+  void clear_serialized_data();
 
   /**
    * Calls the postprocess() function for each of the dof-based postprocessor
@@ -1274,6 +1298,37 @@ void PostProcessingHandler<dim>::compute_multiphase_indicators(
     std::cout.precision(old_precision);
     std::cout.flags(old_flags);
   }
+}
+
+template <int dim>
+template <class Archive>
+void PostProcessingHandler<dim>::serialize(Archive &ar,
+                                           const unsigned int /*version*/)
+{
+  ar &forces_table;
+  ar &forces_table_per_slice;
+  ar &structure_mean_position_table;
+  ar &field_integral_tables;
+  ar &volume_of_phases;
+  ar &center_of_mass_phases;
+  ar &average_velocity_phases;
+  ar &visualization_times_and_names;
+  ar &visualization_times_and_names_skin;
+}
+
+template <int dim>
+void PostProcessingHandler<dim>::clear_serialized_data()
+{
+  // The members serialized in serialize()
+  forces_table.clear();
+  forces_table_per_slice.clear();
+  structure_mean_position_table.clear();
+  field_integral_tables.clear();
+  volume_of_phases.clear();
+  center_of_mass_phases.clear();
+  average_velocity_phases.clear();
+  visualization_times_and_names.clear();
+  visualization_times_and_names_skin.clear();
 }
 
 #endif

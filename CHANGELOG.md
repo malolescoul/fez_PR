@@ -4,10 +4,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/).
 Please use the tags "Added", "Changed" or "Fixed", depending on the nature of the changes.
 
+## [0.0.0] 2026-11-17
+
+### Fixed
+In the BDF error estimator, reinitialize the additional BDF history vector after MPI repartitioning, even when the global number of DoFs is unchanged. This prevents incompatible local vector sizes after mesh adaptation when time step adaptation based on BDF truncation error is enabled. The vector is also no longer unnecessarily stored with CFL-based time stepping. [#128](https://github.com/arthurbawin/fez/pull/128)
+
+### Changed
+`TimeHandler::attach_data_to_error_estimator()` renamed `reinit_error_estimator()`, and also takes the locally owned dofs and the MPI communicator. [#128](https://github.com/arthurbawin/fez/pull/128)
+
+Serialize the postprocessing handler, to write full .pvd and postprocessing files after restart.
+The solution restored from a checkpoint is no longer postprocessed a second time, so a restarted simulation writes the same files as an uninterrupted one. Checkpoints written before this change are now invalid, and can no longer be read. [#129](https://github.com/arthurbawin/fez/pull/129)
+
+Each checkpoint is now written to its own directory `<prefix>_<N>.chk` in the output directory, with `N` the time step padded with zeros to 6 digits, instead of overwriting the previous checkpoint. An existing directory for the same time step is renamed to `<prefix>_<N>.bak<k>.chk`. The `Checkpoint Restart` parameter `checkpoint file` is renamed `checkpoint prefix`. The new parameter `restart from` selects the checkpoint directory to restart from (`latest` by default), and `checkpoints to keep` limits the number of kept checkpoint directories (all of them by default). A restart with a different number of MPI processes than the checkpoint now throws an error. The state of the solver is now written to binary instead of text archives, which are about 3 times smaller and faster to write and read, but can only be read on machines with the same byte order and integer sizes, e.g., deal.II built with the same index size. [#129](https://github.com/arthurbawin/fez/pull/129)
+
 ## [0.0.0] 2026-11-16
 
 ### Changed
-Renamed the standalone `linear_elasticity` solver to `elasticity`, including its classes, examples, tests and VTU output suffix. Rename the `Linear elasticity` parameter subsection to `Elasticity`, and `Linear solver/linear elasticity` to `Linear solver/elasticity` in existing parameter files. The `linear elasticity` constitutive model and the numerical algorithms are unchanged.
+Renamed the standalone `linear_elasticity` solver to `elasticity`, including its classes, examples, tests and VTU output suffix. Rename the `Linear elasticity` parameter subsection to `Elasticity`, and `Linear solver/linear elasticity` to `Linear solver/elasticity` in existing parameter files. The `linear elasticity` constitutive model and the numerical algorithms are unchanged. [#125](https://github.com/arthurbawin/fez/pull/125)
+
+## [0.0.0] 2026-11-14
+
+### Fixed
+Removed erroneous face contribution to the Jacobian matrix when applying weak pressure boundary conditions in the compressible solver. [#117](https://github.com/arthurbawin/fez/pull/117)
 
 ## [0.0.0] 2026-11-13
 

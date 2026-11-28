@@ -55,6 +55,16 @@ public:
   bool is_steady() const;
 
   /**
+   * Returns true if this simulation was restarted from a checkpoint and
+   * continues the checkpointed simulation, i.e., if both are steady or both
+   * are unsteady. Restarting an unsteady simulation from a stationary
+   * checkpoint, or the other way around, starts a new simulation from the
+   * checkpointed solution, and this function returns false. It also returns
+   * false if the simulation was not restarted.
+   */
+  bool continues_checkpointed_simulation() const;
+
+  /**
    * For BDF methods, return true if the current time step is a
    * "starting step" (none for BDF1, first for BDF2).
    */
@@ -108,15 +118,19 @@ public:
   const std::vector<double> &get_bdf_coefficients() const;
 
   /**
-   * Attach solver data to the error estimator.
-   * If adaptive time stepping is enabled, this function must be called before
-   * the first call to is_timestep_accepted(), which relies on the error
-   * estimates to accept or reject a step.
+   * Reinitialize the error estimator with the solver's dof data.
+   * If the time step is adapted based on the BDF truncation error, this
+   * function must be called before the first call to is_timestep_accepted(),
+   * which relies on the error estimates to accept or reject a step, and again
+   * each time the dofs are redistributed, so that the vectors stored in the
+   * error estimator have the same parallel layout as the solution vectors.
    */
-  void attach_data_to_error_estimator(
-    const ComponentOrdering          &ordering,
-    const IndexSet                   &locally_relevant_dofs,
-    const std::vector<unsigned char> &dofs_to_component);
+  void
+  reinit_error_estimator(const ComponentOrdering &ordering,
+                         const IndexSet          &locally_owned_dofs,
+                         const IndexSet          &locally_relevant_dofs,
+                         const std::vector<unsigned char> &dofs_to_component,
+                         const MPI_Comm                    comm);
 
   /**
    * Return the vector of the last computed error estimator at each dof.
@@ -288,6 +302,9 @@ public:
 
   // Time step counter at which the last restart happened
   unsigned int time_iteration_at_last_restart;
+
+  // True if this simulation continues a checkpointed simulation
+  bool continues_checkpoint;
 
   // Initial time (for this subinterval)
   double initial_time;

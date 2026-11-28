@@ -1,6 +1,7 @@
 
-#include <boost/archive/text_iarchive.hpp>
-#include <boost/archive/text_oarchive.hpp>
+#include <boost/archive/binary_iarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
+#include <checkpoint_tools.h>
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/error_estimator.h>
 #include <deal.II/numerics/solution_transfer.h>
@@ -353,7 +354,18 @@ void NavierStokesSolver<dim, with_moving_mesh>::run_time_subinterval(
   // initial solution on this time interval. For unsteady simulations with mesh
   // adaptation with a Riemannian metric, this is needed to obtain an adapted
   // mesh that includes the initial condition.
-  postprocess_solution();
+  //
+  // If the postprocessing data were restored from a checkpoint, the restored
+  // solution was already postprocessed before writing the checkpoint, and is
+  // not postprocessed again, as in an uninterrupted simulation. Only the
+  // errors, which are not checkpointed, are computed again.
+  if (time_handler.continues_checkpointed_simulation())
+  {
+    if (should_compute_errors(time_handler))
+      compute_errors();
+  }
+  else
+    postprocess_solution();
 
   while (!time_handler.is_finished())
   {
@@ -407,7 +419,7 @@ void NavierStokesSolver<dim, with_moving_mesh>::run_time_subinterval(
 
     time_handler.rotate_solutions(*present_solution, *previous_solutions);
 
-    if (param.checkpoint_restart.enable_checkpoint &&
+    if (param.checkpoint_restart.enable &&
         (time_handler.current_time_iteration %
            param.checkpoint_restart.checkpoint_frequency ==
          0))
@@ -477,10 +489,12 @@ void NavierStokesSolver<dim, with_moving_mesh>::setup_dofs()
                          locally_relevant_dofs,
                          dofs_to_component);
 
-  // Attach data to time error estimator
-  time_handler.attach_data_to_error_estimator(*ordering,
-                                              locally_relevant_dofs,
-                                              dofs_to_component);
+  // Reinit the time error estimator
+  time_handler.reinit_error_estimator(*ordering,
+                                      locally_owned_dofs,
+                                      locally_relevant_dofs,
+                                      dofs_to_component,
+                                      comm);
 
   // Initialize parallel vectors
   present_solution->reinit(locally_owned_dofs, locally_relevant_dofs, comm);
@@ -1297,7 +1311,10 @@ void NavierStokesSolver<dim, with_moving_mesh>::save(
   const unsigned int /* version */) const
 {
   ar &(*present_solution);
-  ar & previous_solutions->size();
+  // Saved with the same type as it is loaded in load(), which binary archives
+  // require
+  const unsigned int n_previous_solutions = previous_solutions->size();
+  ar                &n_previous_solutions;
   for (const auto &previous_solution : *previous_solutions)
     ar &previous_solution;
 }
@@ -1352,61 +1369,97 @@ void NavierStokesSolver<dim, with_moving_mesh>::checkpoint()
 {
   TimerOutput::Scope t(computing_timer, "Write checkpoint");
 
-  pcout << std::endl;
-  pcout << "--- Writing checkpoint... ---" << std::endl << std::endl;
+  const auto        &checkpoint_param = param.checkpoint_restart;
+  const unsigned int time_step        = time_handler.current_time_iteration;
 
-  const std::string tmp_checkpoint_prefix =
-    param.output.output_dir + "tmp." + param.checkpoint_restart.filename;
+  pcout << std::endl;
+  pcout << "--- Writing checkpoint to "
+        << CheckpointTools::checkpoint_directory(param.output.output_dir,
+                                                 checkpoint_param.prefix,
+                                                 time_step)
+        << " ---" << std::endl
+        << std::endl;
+
+  // The checkpoint is written to a temporary directory, which is renamed in
+  // finalize_checkpoint_directory() once all ranks are done writing
+  const std::string directory =
+    CheckpointTools::create_temporary_checkpoint_directory(
+      param.output.output_dir,
+      checkpoint_param.prefix,
+      time_step,
+      mpi_communicator);
 
   {
     // Write a checkpoint file for each rank
     // All ranks will read the same local range for their PETSc vector otherwise
-    std::ofstream checkpoint_file(tmp_checkpoint_prefix + "_rank" +
-                                  std::to_string(mpi_rank));
+    std::ofstream checkpoint_file(directory + "state_rank" +
+                                    std::to_string(mpi_rank),
+                                  std::ios::binary);
     AssertThrow(checkpoint_file,
                 ExcMessage("Could not write to the checkpoint file."));
-    boost::archive::text_oarchive archive(checkpoint_file);
+    boost::archive::binary_oarchive archive(checkpoint_file);
 
     archive << *this;
     archive << time_handler;
+    archive << *postproc_handler;
   }
 
-  triangulation->save(tmp_checkpoint_prefix);
+  triangulation->save(directory + "triangulation");
 
-  replace_temporary_files(param.output.output_dir,
-                          "tmp." + param.checkpoint_restart.filename,
-                          param.checkpoint_restart.filename,
-                          mpi_communicator);
+  CheckpointTools::write_checkpoint_info(directory,
+                                         time_step,
+                                         time_handler.current_time,
+                                         mpi_communicator);
+
+  CheckpointTools::finalize_checkpoint_directory(
+    param.output.output_dir,
+    checkpoint_param.prefix,
+    time_step,
+    checkpoint_param.n_checkpoints_to_keep,
+    mpi_communicator);
 }
 
 template <int dim, bool with_moving_mesh>
 void NavierStokesSolver<dim, with_moving_mesh>::restart()
 {
+  const auto       &checkpoint_param = param.checkpoint_restart;
+  const std::string directory =
+    CheckpointTools::find_restart_directory(param.output.output_dir,
+                                            checkpoint_param.prefix,
+                                            checkpoint_param.restart_from,
+                                            mpi_communicator);
+
   pcout << std::endl;
-  pcout << "--- Reading checkpoint... ---" << std::endl << std::endl;
+  pcout << "--- Reading checkpoint from " << directory << " ---" << std::endl
+        << std::endl;
 
-  const std::string checkpoint_prefix =
-    param.output.output_dir + param.checkpoint_restart.filename;
+  CheckpointTools::check_checkpoint_info(directory, mpi_communicator);
 
-  triangulation->load(checkpoint_prefix);
+  triangulation->load(directory + "triangulation");
 
   // Setup up the dof handler and allocate parallel vectors before loading
   // the stored solutions
   setup_dofs();
 
-  {
-    std::ifstream checkpoint_file(checkpoint_prefix + "_rank" +
-                                  std::to_string(mpi_rank));
-    AssertThrow(checkpoint_file,
-                ExcMessage("Could not read from the checkpoint file."));
-    boost::archive::text_iarchive archive(checkpoint_file);
+  std::ifstream checkpoint_file(directory + "state_rank" +
+                                  std::to_string(mpi_rank),
+                                std::ios::binary);
+  AssertThrow(checkpoint_file,
+              ExcMessage("Could not read from the checkpoint file."));
+  boost::archive::binary_iarchive archive(checkpoint_file);
 
-    archive >> *this;
-    archive >> time_handler;
-  }
+  archive >> *this;
+  archive >> time_handler;
+  archive >> *postproc_handler;
 
-  // Update the time handler
+  // Update the time handler with the parameters of the current simulation
   time_handler.update_parameters_after_restart(param.time_integration);
+
+  // The postprocessing data of a new simulation start from scratch. They are
+  // read above anyway, so that the content of the archive does not depend on
+  // the restarted simulation.
+  if (!time_handler.continues_checkpointed_simulation())
+    postproc_handler->clear_serialized_data();
 }
 
 // Explicit instantiation

@@ -455,31 +455,37 @@ public:
   virtual void adapt_mesh() override;
 
   /**
-   * Write the current state of the simulation to compressed save files. This
-   * method and the restart() are based on deal.II's step 83. The written data
-   * are the mesh, the current and previous solutions, and the content of the
-   * time handler. All other data (dof_handler, finite element spaces,
-   * constraints, etc.) can be recomputed when the simulation restarts. See also
-   * step 83 for a discussion on this topic.
+   * Write the current state of the simulation to binary save files, in
+   * the checkpoint directory of the current time step (see CheckpointTools).
+   * This method and the restart() are based on deal.II's step 83. The written
+   * data are the mesh, the current and previous solutions, the content of the
+   * time and postprocessing handlers. The checkpoint is written after the
+   * solution of the current time step was postprocessed. All other data
+   * (dof_handler, finite element spaces, constraints, etc.) can be recomputed
+   * when the simulation restarts. See also step 83 for a discussion on this
+   * topic.
    */
   void checkpoint();
 
   /**
    * Restart the simulation from saved checkpoint files, written by
-   * checkpoint().
+   * checkpoint(), in the checkpoint directory given by the "restart from"
+   * parameter (see CheckpointTools::find_restart_directory()).
    */
   void restart();
 
   /**
-   * Save this object to file. See also the comments for the checkpoint()
-   * function. This function currently only saves the present and previous
-   * solution vectors.
+   * Save the present and previous solution vectors to an archive. Only the
+   * state owned by this class is serialized here: checkpoint() and restart()
+   * combine it with the triangulation and the time and postprocessing
+   * handlers, which are serialized separately.
    */
   template <class Archive>
   void save(Archive &ar, const unsigned int version) const;
 
   /**
-   * Load the present and previous solution vectors from checkpointed data.
+   * Load the present and previous solution vectors from an archive written by
+   * save().
    */
   template <class Archive>
   void load(Archive &ar, const unsigned int version);

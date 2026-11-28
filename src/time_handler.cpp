@@ -21,6 +21,7 @@ TimeHandler::TimeHandler(const Parameters::TimeIntegration &time_parameters)
   , current_time_iteration(0)
   , current_time_iteration_in_interval(0)
   , time_iteration_at_last_restart(0)
+  , continues_checkpoint(false)
   , initial_time(time_parameters.t_initial)
   , final_time(time_parameters.t_end)
   , initial_times(n_time_intervals)
@@ -97,7 +98,9 @@ TimeHandler::TimeHandler(const Parameters::TimeIntegration &time_parameters)
   time_steps.resize(n_previous_solutions + 1, initial_dt);
   bdf_coefficients.resize(n_previous_solutions + 1, 0.);
 
-  if (!is_steady() && with_adaptive_timestep)
+  using Strategy = Parameters::TimeIntegration::Adaptation::AdaptationStrategy;
+  if (!is_steady() && with_adaptive_timestep &&
+      time_parameters.adaptation.strategy == Strategy::BDFTruncationError)
     error_estimator =
       std::make_shared<BDFErrorEstimator>(time_parameters, *this);
 }
@@ -137,6 +140,11 @@ void TimeHandler::validate_parameters(const ComponentOrdering &ordering) const
 bool TimeHandler::is_steady() const
 {
   return steady_scheme;
+}
+
+bool TimeHandler::continues_checkpointed_simulation() const
+{
+  return continues_checkpoint;
 }
 
 bool TimeHandler::is_starting_step() const
@@ -238,7 +246,7 @@ void TimeHandler::advance(const ConditionalOStream &pcout)
   }
 
   // Advance the time tables in the error estimator
-  if (with_adaptive_timestep)
+  if (error_estimator)
     error_estimator->advance(*this);
 
   rolledback_step = false;
@@ -252,7 +260,7 @@ void TimeHandler::rotate_solutions(
   {
     // Rotate the additional solution vector in the error estimator
     // Do this first, before overwriting the last solution
-    if (!is_steady() && with_adaptive_timestep)
+    if (error_estimator)
       error_estimator->rotate_additional_solution(previous_solutions.back());
 
     for (unsigned int j = previous_solutions.size() - 1; j >= 1; --j)
@@ -266,19 +274,24 @@ const std::vector<double> &TimeHandler::get_bdf_coefficients() const
   return bdf_coefficients;
 }
 
-void TimeHandler::attach_data_to_error_estimator(
+void TimeHandler::reinit_error_estimator(
   const ComponentOrdering          &ordering,
+  const IndexSet                   &locally_owned_dofs,
   const IndexSet                   &locally_relevant_dofs,
-  const std::vector<unsigned char> &dofs_to_component)
+  const std::vector<unsigned char> &dofs_to_component,
+  const MPI_Comm                    comm)
 {
   if (error_estimator)
-    error_estimator->attach_data(ordering,
-                                 locally_relevant_dofs,
-                                 dofs_to_component);
+    error_estimator->reinit(ordering,
+                            locally_owned_dofs,
+                            locally_relevant_dofs,
+                            dofs_to_component,
+                            comm);
 }
 
 const LA::ParVectorType &TimeHandler::get_error_estimator_as_solution() const
 {
+  Assert(error_estimator, ExcInternalError());
   return error_estimator->get_error_estimator_as_solution();
 }
 
@@ -630,6 +643,7 @@ void TimeHandler::update_parameters_after_restart(
   // Save it before overwriting with the new simulation's scheme.
   const bool is_checkpoint_steady = steady_scheme;
   steady_scheme                   = new_parameters.scheme == STAT;
+  continues_checkpoint            = is_checkpoint_steady == steady_scheme;
 
   // Nothing to update if current solver is steady-state
   if (steady_scheme)
